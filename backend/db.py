@@ -69,7 +69,23 @@ def _init_db():
             brief_summary         TEXT,
             -- Meta
             has_news              INTEGER DEFAULT 0,
-            ingested_at           TEXT
+            ingested_at           TEXT,
+            -- EU registry cross-reference
+            euct_id               TEXT,
+            eudract_number        TEXT,
+            registry_sources      TEXT DEFAULT '["ClinicalTrials.gov"]',
+            all_registry_ids      TEXT,
+            eu_member_states      TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS registry_source_records (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            trial_id              TEXT REFERENCES trials(id),
+            registry              TEXT,
+            registry_trial_id     TEXT,
+            raw_data              TEXT,
+            ingested_at           TEXT,
+            UNIQUE(trial_id, registry)
         );
 
         CREATE TABLE IF NOT EXISTS news_items (
@@ -85,6 +101,7 @@ def _init_db():
             nct_ids_found         TEXT,
             trial_id              TEXT REFERENCES trials(id),
             is_trial_announcement INTEGER DEFAULT 0,
+            is_trial_results      INTEGER DEFAULT 0,
             ingested_at           TEXT
         );
 
@@ -96,6 +113,19 @@ def _init_db():
         );
     """)
     conn.commit()
+    for alter in [
+        "ALTER TABLE news_items ADD COLUMN is_trial_results INTEGER DEFAULT 0",
+        "ALTER TABLE trials ADD COLUMN euct_id TEXT",
+        "ALTER TABLE trials ADD COLUMN eudract_number TEXT",
+        "ALTER TABLE trials ADD COLUMN registry_sources TEXT DEFAULT '[\"ClinicalTrials.gov\"]'",
+        "ALTER TABLE trials ADD COLUMN all_registry_ids TEXT",
+        "ALTER TABLE trials ADD COLUMN eu_member_states TEXT",
+    ]:
+        try:
+            conn.execute(alter)
+            conn.commit()
+        except Exception:
+            pass
     conn.close()
 
 

@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
   paramsSerializer: {
     serialize: (params) => {
       const sp = new URLSearchParams()
@@ -21,4 +21,5 @@ const api = axios.create({
 export const getTrials = (params) => api.get('/trials', { params })
 export const getNews = (params) => api.get('/news', { params })
 export const getTrialNews = (nctId) => api.get(`/trials/${nctId}/news`)
+export const getTrialRegistries = (trialId) => api.get(`/trials/${trialId}/registries`)
 export const getStats = () => api.get('/stats')

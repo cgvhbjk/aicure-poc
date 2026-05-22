@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import TrialsTable from './components/TrialsTable'
 import NewsTable from './components/NewsTable'
+import ViewsSidebar from './components/ViewsSidebar'
 import { getStats } from './api'
 import './App.css'
 
@@ -45,7 +46,7 @@ const SOURCES = [
 export default function App() {
   const [activeTab, setActiveTab] = useState('trials')
   const [stats, setStats] = useState(null)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [filterOpen, setFilterOpen] = useState(false)
 
   const [searchText, setSearchText] = useState('')
   const [selectedStatuses, setSelectedStatuses] = useState([])
@@ -54,8 +55,13 @@ export default function App() {
   const [hasNewsOnly, setHasNewsOnly] = useState(false)
 
   const [selectedSources, setSelectedSources] = useState([])
+  const [selectedRegistries, setSelectedRegistries] = useState([])
   const [linkedOnly, setLinkedOnly] = useState(null)
   const [announcementsOnly, setAnnouncementsOnly] = useState(false)
+  const [resultsOnly, setResultsOnly] = useState(false)
+
+  // Ref to the trials grid API, shared with ViewsSidebar
+  const trialApiRef = useRef(null)
 
   const debouncedSearch = useDebounce(searchText, 400)
 
@@ -75,8 +81,9 @@ export default function App() {
       phase: selectedPhases.length ? selectedPhases : undefined,
       therapeutic_area: selectedAreas.length ? selectedAreas : undefined,
       has_news: hasNewsOnly || undefined,
+      registry: selectedRegistries.length ? selectedRegistries : undefined,
     }),
-    [debouncedSearch, selectedStatuses, selectedPhases, selectedAreas, hasNewsOnly]
+    [debouncedSearch, selectedStatuses, selectedPhases, selectedAreas, hasNewsOnly, selectedRegistries]
   )
 
   const newsFilters = useMemo(
@@ -85,8 +92,9 @@ export default function App() {
       source: selectedSources.length ? selectedSources : undefined,
       linked_only: linkedOnly,
       is_trial_announcement: announcementsOnly || undefined,
+      is_trial_results: resultsOnly || undefined,
     }),
-    [debouncedSearch, selectedSources, linkedOnly, announcementsOnly]
+    [debouncedSearch, selectedSources, linkedOnly, announcementsOnly, resultsOnly]
   )
 
   const clearFilters = () => {
@@ -96,9 +104,13 @@ export default function App() {
     setSelectedAreas([])
     setHasNewsOnly(false)
     setSelectedSources([])
+    setSelectedRegistries([])
     setLinkedOnly(null)
     setAnnouncementsOnly(false)
+    setResultsOnly(false)
   }
+
+  const toggleFilter = () => setFilterOpen(v => !v)
 
   return (
     <div className="app">
@@ -109,6 +121,12 @@ export default function App() {
             <span className="stat-pill">{stats.total_trials.toLocaleString()} trials</span>
             <span className="stat-pill accent">{stats.trials_with_news} with news</span>
             <span className="stat-pill">{stats.total_news} news items</span>
+            {stats.eu_ctis_count > 0 && (
+              <span className="stat-pill eu">CTIS {stats.eu_ctis_count}</span>
+            )}
+            {stats.eu_ctr_count > 0 && (
+              <span className="stat-pill eu">EU-CTR {stats.eu_ctr_count}</span>
+            )}
             {stats.last_ingested && (
               <span className="stat-pill muted">
                 Ingested {stats.last_ingested.slice(0, 10)}
@@ -131,89 +149,103 @@ export default function App() {
           className={`tab-btn${activeTab === 'news' ? ' active' : ''}`}
           onClick={() => setActiveTab('news')}
         >
-          News (unlinked)
+          News
         </button>
       </div>
 
       <div className="main-layout">
-        <div className={`sidebar${sidebarOpen ? '' : ' collapsed'}`}>
-          <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
-            {sidebarOpen ? '◀' : '▶'}
-          </button>
+        {/* Views sidebar — always visible, left */}
+        <ViewsSidebar gridApiRef={trialApiRef} />
 
-          {sidebarOpen && (
-            <div className="sidebar-inner">
-              <div className="filter-group">
-                <div className="filter-label">Search</div>
-                <input
-                  className="search-input"
-                  type="text"
-                  placeholder="Title, sponsor, drug…"
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                />
-              </div>
+        <div className="app-body">
+          {/* Filter sidebar — toggled by Filter button in each table's toolbar */}
+          {filterOpen && (
+            <div className="filter-sidebar">
+              <div className="filter-sidebar-inner">
+                <div className="filter-group">
+                  <div className="filter-label">Search</div>
+                  <input
+                    className="search-input"
+                    type="text"
+                    placeholder="Title, sponsor, drug…"
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                  />
+                </div>
 
-              {activeTab === 'trials' && (
-                <>
-                  <CheckGroup
-                    label="Status"
-                    options={STATUSES}
-                    selected={selectedStatuses}
-                    onToggle={toggle(setSelectedStatuses)}
-                    labelFn={(s) => s.replace(/_/g, ' ')}
-                  />
-                  <CheckGroup
-                    label="Phase"
-                    options={PHASES}
-                    selected={selectedPhases}
-                    onToggle={toggle(setSelectedPhases)}
-                    labelFn={(p) => p.replace('PHASE', 'Phase ')}
-                  />
-                  {therapeuticAreas.length > 0 && (
+                {activeTab === 'trials' && (
+                  <>
                     <CheckGroup
-                      label="Therapeutic Area"
-                      options={therapeuticAreas}
-                      selected={selectedAreas}
-                      onToggle={toggle(setSelectedAreas)}
+                      label="Status"
+                      options={STATUSES}
+                      selected={selectedStatuses}
+                      onToggle={toggle(setSelectedStatuses)}
+                      labelFn={(s) => s.replace(/_/g, ' ')}
                     />
-                  )}
-                  <div className="filter-group">
-                    <label className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={hasNewsOnly}
-                        onChange={() => setHasNewsOnly((v) => !v)}
+                    <CheckGroup
+                      label="Phase"
+                      options={PHASES}
+                      selected={selectedPhases}
+                      onToggle={toggle(setSelectedPhases)}
+                      labelFn={(p) => p.replace('PHASE', 'Phase ')}
+                    />
+                    {therapeuticAreas.length > 0 && (
+                      <CheckGroup
+                        label="Therapeutic Area"
+                        options={therapeuticAreas}
+                        selected={selectedAreas}
+                        onToggle={toggle(setSelectedAreas)}
                       />
-                      Has linked news only
-                    </label>
-                  </div>
-                </>
-              )}
+                    )}
+                    <div className="filter-group">
+                      <label className="checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={hasNewsOnly}
+                          onChange={() => setHasNewsOnly((v) => !v)}
+                        />
+                        Has linked news only
+                      </label>
+                    </div>
+                    <CheckGroup
+                      label="Registry Source"
+                      options={['ClinicalTrials.gov', 'CTIS', 'EU-CTR']}
+                      selected={selectedRegistries}
+                      onToggle={toggle(setSelectedRegistries)}
+                    />
+                  </>
+                )}
 
-              {activeTab === 'news' && (
-                <>
-                  <CheckGroup
-                    label="Source"
-                    options={SOURCES}
-                    selected={selectedSources}
-                    onToggle={toggle(setSelectedSources)}
-                  />
-                  <div className="filter-group">
-                    <label className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={announcementsOnly}
-                        onChange={() => setAnnouncementsOnly((v) => !v)}
-                      />
-                      Trial announcements only ★
-                    </label>
-                  </div>
+                {activeTab === 'news' && (
+                  <>
+                    <CheckGroup
+                      label="Source"
+                      options={SOURCES}
+                      selected={selectedSources}
+                      onToggle={toggle(setSelectedSources)}
+                    />
+                    <div className="filter-group">
+                      <label className="checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={announcementsOnly}
+                          onChange={() => { setAnnouncementsOnly((v) => !v); setResultsOnly(false) }}
+                        />
+                        New trial announcements ★
+                      </label>
+                      <label className="checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={resultsOnly}
+                          onChange={() => { setResultsOnly((v) => !v); setAnnouncementsOnly(false) }}
+                        />
+                        Trial results / findings ●
+                      </label>
+                    </div>
 
-                  <div className="filter-group">
-                    <div className="filter-label">Linked status</div>
-                    {[['All', null], ['Linked', true], ['Unlinked', false]].map(
-                      ([lbl, val]) => (
+                    <div className="filter-group">
+                      <div className="filter-label">Linked status</div>
+                      {[['All', null], ['Linked', true], ['Unlinked', false]].map(([lbl, val]) => (
                         <label key={lbl} className="checkbox-label">
                           <input
                             type="radio"
@@ -222,22 +254,35 @@ export default function App() {
                           />
                           {lbl}
                         </label>
-                      )
-                    )}
-                  </div>
-                </>
-              )}
+                      ))}
+                    </div>
+                  </>
+                )}
 
-              <button className="btn-clear" onClick={clearFilters}>
-                Clear all filters
-              </button>
+                <button className="btn-clear" onClick={clearFilters}>
+                  Clear all filters
+                </button>
+              </div>
             </div>
           )}
-        </div>
 
-        <div className="content">
-          {activeTab === 'trials' && <TrialsTable filters={trialFilters} />}
-          {activeTab === 'news' && <NewsTable filters={newsFilters} />}
+          <div className="content">
+            {activeTab === 'trials' && (
+              <TrialsTable
+                filters={trialFilters}
+                filterOpen={filterOpen}
+                onToggleFilter={toggleFilter}
+                onGridReady={(api) => { trialApiRef.current = api }}
+              />
+            )}
+            {activeTab === 'news' && (
+              <NewsTable
+                filters={newsFilters}
+                filterOpen={filterOpen}
+                onToggleFilter={toggleFilter}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>

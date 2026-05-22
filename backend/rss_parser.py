@@ -52,7 +52,7 @@ SPONSOR_DOMAINS = [
 ]
 
 TRIAL_ANNOUNCEMENT_KEYWORDS = [
-    # Initiation verbs (matches "Company X Initiates Phase 2 Study of...")
+    # Initiation verbs + "phase" (avoids matching results headlines about phase X data)
     "initiates phase", "initiate phase", "initiating phase",
     "begins phase", "begin phase", "beginning phase",
     "starts phase", "start phase",
@@ -65,25 +65,47 @@ TRIAL_ANNOUNCEMENT_KEYWORDS = [
     "seeking patients", "seeking participants",
     "recruiting patients", "recruiting participants",
     "open for enrollment", "open to enrollment",
-    # First patient milestones
+    # First patient milestones — strongest signal
     "first patient enrolled", "first patient dosed", "first patient treated",
     "first-in-human", "first in human", "first in-human",
     "doses first patient", "dosed first patient",
-    # IND / regulatory filing triggers
+    # IND / regulatory filing — strongest signal
     "ind filed", "ind accepted", "ind cleared", "ind application",
     "ind clearance", "investigational new drug",
-    # Study design terms that signal a new trial
-    "dose escalation", "dose-escalation",
-    "proof of concept study", "proof-of-concept study",
-    "clinical trial begins", "trial begins", "study begins",
+    # Explicit launch language
     "study initiation", "trial initiation", "trial launch",
-    "new clinical trial", "new study", "new trial",
-    "announces trial", "announces clinical trial", "announces study",
-    "multicenter trial", "multicenter study",
-    "randomized controlled trial",
-    "placebo-controlled study", "placebo-controlled trial",
+    "announces trial", "announces clinical trial",
     # NCT registration language
     "clinicaltrials.gov",
+]
+
+RESULTS_KEYWORDS = [
+    # Outcome reporting language
+    "results show", "results showed", "results demonstrated", "results indicate",
+    "study shows", "study showed", "study found", "study demonstrated",
+    "trial shows", "trial showed", "trial found", "trial demonstrated",
+    "data show", "data showed", "data demonstrate",
+    "found that", "showed that", "demonstrated that",
+    # Cause/association framing (appears in observational findings)
+    "linked to greater", "associated with greater", "associated with weight",
+    "leads to greater", "leads to weight",
+    # Publication language
+    "published in", "in the journal", "in nejm", "in the lancet", "in jama",
+    "in the new england journal",
+    # Results milestone language
+    "interim results", "top-line results", "topline results", "final results",
+    "primary results", "data readout", "readout",
+    "met its primary endpoint", "missed primary endpoint", "failed to meet",
+    "met primary endpoint",
+    # Weight/outcome framing that signals findings, not enrollment
+    "percent of their body weight", "percent of body weight",
+    "percent weight loss", "% body weight",
+    # Analysis types
+    "post-hoc", "subgroup analysis", "meta-analysis", "retrospective",
+    "real-world data", "real world data",
+    # Phase results framing
+    "phase 2 results", "phase 3 results", "phase 2 data", "phase 3 data",
+    "phase ii results", "phase iii results", "phase ii data", "phase iii data",
 ]
 
 # Broad pharma terms used to filter out off-topic noise (applied per-source via require_relevance)
@@ -170,9 +192,10 @@ def parse_feed(feed_info):
         phase_match = PHASE_PATTERN.search(combined)
         phase_mentioned = phase_match.group(0) if phase_match else None
         sponsor_mentioned = next((s for s in SPONSOR_DOMAINS if s in text), None)
-        is_trial_announcement = 1 if (
-            _flag(combined, TRIAL_ANNOUNCEMENT_KEYWORDS) or bool(nct_ids)
-        ) else 0
+        _is_initiation = _flag(combined, TRIAL_ANNOUNCEMENT_KEYWORDS) or bool(nct_ids)
+        _is_results = _flag(combined, RESULTS_KEYWORDS)
+        is_trial_announcement = 1 if (_is_initiation and not _is_results) else 0
+        is_trial_results = 1 if _is_results else 0
 
         items.append({
             "source": source,
@@ -186,6 +209,7 @@ def parse_feed(feed_info):
             "nct_ids_found": json.dumps(nct_ids),
             "trial_id": None,
             "is_trial_announcement": is_trial_announcement,
+            "is_trial_results": is_trial_results,
             "ingested_at": now,
         })
 
@@ -211,11 +235,11 @@ def parse_all_feeds():
                         INSERT OR IGNORE INTO news_items
                           (source, title, url, published_at, body_snippet,
                            sponsor_mentioned, drug_mentioned, phase_mentioned,
-                           nct_ids_found, trial_id, is_trial_announcement, ingested_at)
+                           nct_ids_found, trial_id, is_trial_announcement, is_trial_results, ingested_at)
                         VALUES
                           (:source, :title, :url, :published_at, :body_snippet,
                            :sponsor_mentioned, :drug_mentioned, :phase_mentioned,
-                           :nct_ids_found, :trial_id, :is_trial_announcement, :ingested_at)
+                           :nct_ids_found, :trial_id, :is_trial_announcement, :is_trial_results, :ingested_at)
                         """,
                         item,
                     )

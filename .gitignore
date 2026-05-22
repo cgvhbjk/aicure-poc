@@ -6,8 +6,8 @@ __pycache__/
 venv/
 *.egg
 
-# Database & snapshots (data is generated, not source)
-backend/data/
+# Snapshots are large generated JSON files; DB is committed so deploys have data
+backend/data/snapshots/
 
 # Node
 node_modules/

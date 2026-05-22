@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { getTrialNews } from '../api'
+import React, { useState, useEffect, useCallback } from 'react'
+import { getTrialNews, getTrialRegistries } from '../api'
 
 const STATUS_STYLES = {
   RECRUITING:             { background: '#dcfce7', color: '#166534' },
@@ -99,48 +99,80 @@ const SECTIONS = [
 ]
 
 function CriteriaBlock({ label, text }) {
-  const [expanded, setExpanded] = useState(false)
   if (!text) return null
-  const preview = text.slice(0, 200)
-  const isLong = text.length > 200
   return (
     <div style={{ marginBottom: 12 }}>
-      <div className="detail-field-label" style={{ textAlign: 'left', marginBottom: 4 }}>
-        {label}
-      </div>
-      <div
-        className="detail-field-value"
-        style={{ whiteSpace: 'pre-wrap', fontSize: 11, lineHeight: 1.5 }}
-      >
-        {expanded ? text : preview}
-        {isLong && (
-          <button
-            onClick={() => setExpanded((v) => !v)}
-            style={{
-              display: 'block', marginTop: 4, border: 'none', background: 'none',
-              color: '#2563eb', cursor: 'pointer', fontSize: 11, padding: 0,
-            }}
-          >
-            {expanded ? 'Show less ▲' : 'Show more ▼'}
-          </button>
-        )}
-      </div>
+      <div className="detail-field-label" style={{ textAlign: 'left', marginBottom: 4 }}>{label}</div>
+      <pre style={{
+        whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 11, lineHeight: 1.6,
+        color: '#334155', margin: 0, maxHeight: 280, overflowY: 'auto',
+        background: '#f8fafc', borderRadius: 6, padding: '8px 10px',
+      }}>
+        {text}
+      </pre>
     </div>
   )
+}
+
+function AllFields({ trial }) {
+  const [open, setOpen] = useState(false)
+  const entries = Object.entries(trial).filter(([, v]) => v != null && v !== '' && v !== '[]' && v !== '{}')
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <button className="all-fields-toggle" onClick={() => setOpen(v => !v)}>
+        {open ? '▼' : '▶'} All Fields
+      </button>
+      {open && (
+        <div className="all-fields-list">
+          {entries.map(([key, val]) => (
+            <React.Fragment key={key}>
+              <span className="all-fields-key">{key}</span>
+              <span className="all-fields-val">{String(val).slice(0, 300)}</span>
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const REGISTRY_STYLES = {
+  'ClinicalTrials.gov': { background: '#dbeafe', color: '#1e40af' },
+  'CTIS':               { background: '#ede9fe', color: '#6d28d9' },
+  'EU-CTR':             { background: '#fef3c7', color: '#92400e' },
+}
+
+const REGISTRY_URLS = {
+  'ClinicalTrials.gov': (id) => `https://clinicaltrials.gov/study/${id}`,
+  'CTIS':               (id) => `https://euclinicaltrials.eu/search-for-clinical-trials/?lang=en&query=ctNumber:${id}`,
+  'EU-CTR':             (id) => `https://www.clinicaltrialsregister.eu/ctr-search/search?query=${id}`,
 }
 
 export default function DetailPanel({ trial, onClose }) {
   const [news, setNews] = useState([])
   const [loadingNews, setLoadingNews] = useState(false)
+  const [registries, setRegistries] = useState([])
+  const [copied, setCopied] = useState(false)
+
+  const copyNct = useCallback(() => {
+    navigator.clipboard.writeText(trial.id).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }, [trial?.id])
 
   useEffect(() => {
     if (!trial?.id) return
     setNews([])
     setLoadingNews(true)
+    setRegistries([])
     getTrialNews(trial.id)
       .then((r) => setNews(r.data))
       .catch(console.error)
       .finally(() => setLoadingNews(false))
+    getTrialRegistries(trial.id)
+      .then((r) => setRegistries(r.data))
+      .catch(console.error)
   }, [trial?.id])
 
   if (!trial) return null
@@ -164,8 +196,8 @@ export default function DetailPanel({ trial, onClose }) {
         </div>
 
         <div className="detail-body">
-          {/* Status + external link */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+          {/* Status + NCT link + copy button */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
             <span className="badge" style={statusStyle}>
               {(trial.status || '').replace(/_/g, ' ')}
             </span>
@@ -177,6 +209,16 @@ export default function DetailPanel({ trial, onClose }) {
             >
               {trial.id} ↗
             </a>
+            <button
+              onClick={copyNct}
+              style={{
+                border: '1px solid #e2e8f0', borderRadius: 4, background: copied ? '#dcfce7' : '#fff',
+                color: copied ? '#166534' : '#64748b', fontSize: 11, padding: '2px 8px',
+                cursor: 'pointer', transition: 'all 0.2s',
+              }}
+            >
+              {copied ? 'Copied!' : 'Copy NCT'}
+            </button>
           </div>
 
           {/* Brief summary */}
@@ -224,6 +266,35 @@ export default function DetailPanel({ trial, onClose }) {
               <div className="detail-section-title">👥 Eligibility Criteria</div>
               <CriteriaBlock label="Inclusion" text={trial.inclusion_criteria} />
               <CriteriaBlock label="Exclusion" text={trial.exclusion_criteria} />
+            </div>
+          )}
+
+          {/* All Fields — power-user escape hatch */}
+          <AllFields trial={trial} />
+
+          {/* Registry sources */}
+          {registries.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <div className="detail-section-title">🌐 Registry Sources</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                {registries.map((rec) => {
+                  const style = REGISTRY_STYLES[rec.registry] || { background: '#f1f5f9', color: '#475569' }
+                  const urlFn = REGISTRY_URLS[rec.registry]
+                  const url = urlFn ? urlFn(rec.registry_trial_id) : null
+                  return (
+                    <a
+                      key={rec.registry}
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="badge"
+                      style={{ ...style, textDecoration: 'none' }}
+                    >
+                      {rec.registry}: {rec.registry_trial_id}
+                    </a>
+                  )
+                })}
+              </div>
             </div>
           )}
 

@@ -13,7 +13,7 @@ app = FastAPI(title="AiCure POC API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -32,6 +32,7 @@ def get_trials(
     therapeutic_area: Optional[List[str]] = Query(default=None),
     country: Optional[str] = None,
     has_news: Optional[bool] = None,
+    registry: Optional[List[str]] = Query(default=None),
     page: int = 1,
     page_size: int = 100,
 ):
@@ -71,6 +72,12 @@ def get_trials(
         where_clauses.append("has_news = ?")
         params.append(1 if has_news else 0)
 
+    if registry:
+        # Match any trial whose registry_sources JSON array contains at least one of the selected registries
+        reg_clauses = " OR ".join(["registry_sources LIKE ?"] * len(registry))
+        where_clauses.append(f"({reg_clauses})")
+        params.extend([f"%{r}%" for r in registry])
+
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
     total = conn.execute(f"SELECT COUNT(*) FROM trials {where_sql}", params).fetchone()[0]
@@ -90,6 +97,7 @@ def get_news(
     source: Optional[List[str]] = Query(default=None),
     linked_only: Optional[bool] = None,
     is_trial_announcement: Optional[bool] = None,
+    is_trial_results: Optional[bool] = None,
     page: int = 1,
     page_size: int = 100,
 ):
@@ -118,6 +126,10 @@ def get_news(
         where_clauses.append("ni.is_trial_announcement = ?")
         params.append(1 if is_trial_announcement else 0)
 
+    if is_trial_results is not None:
+        where_clauses.append("ni.is_trial_results = ?")
+        params.append(1 if is_trial_results else 0)
+
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
     total = conn.execute(
@@ -130,8 +142,14 @@ def get_news(
         SELECT ni.*,
                (SELECT match_method FROM trial_news_links
                 WHERE news_id = ni.id
-                ORDER BY match_method DESC LIMIT 1) AS match_method
+                ORDER BY match_method DESC LIMIT 1) AS match_method,
+               t.title_brief        AS trial_title,
+               t.status             AS trial_status,
+               t.phase              AS trial_phase,
+               t.therapeutic_area   AS trial_therapeutic_area,
+               t.sponsor            AS trial_sponsor
         FROM news_items ni
+        LEFT JOIN trials t ON ni.trial_id = t.id
         {where_sql}
         ORDER BY ni.published_at DESC
         LIMIT ? OFFSET ?
@@ -141,6 +159,22 @@ def get_news(
 
     conn.close()
     return {"total": total, "results": [row_to_dict(r) for r in rows]}
+
+
+@app.get("/trials/{trial_id}/registries")
+def get_trial_registries(trial_id: str):
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT registry, registry_trial_id, ingested_at
+        FROM registry_source_records
+        WHERE trial_id = ?
+        ORDER BY registry
+        """,
+        (trial_id,),
+    ).fetchall()
+    conn.close()
+    return [row_to_dict(r) for r in rows]
 
 
 @app.get("/trials/{nct_id}/news")
@@ -184,6 +218,19 @@ def get_stats():
         ).fetchall()
     }
 
+    eu_ctis_count = conn.execute(
+        "SELECT COUNT(*) FROM trials WHERE euct_id IS NOT NULL"
+    ).fetchone()[0]
+    eu_ctr_count = conn.execute(
+        "SELECT COUNT(*) FROM trials WHERE eudract_number IS NOT NULL"
+    ).fetchone()[0]
+    by_registry = {
+        r["registry"]: r["n"]
+        for r in conn.execute(
+            "SELECT registry, COUNT(*) AS n FROM registry_source_records GROUP BY registry"
+        ).fetchall()
+    }
+
     last_ingested = conn.execute("SELECT MAX(ingested_at) FROM trials").fetchone()[0]
     conn.close()
 
@@ -192,8 +239,11 @@ def get_stats():
         "trials_with_news": trials_with_news,
         "total_news": total_news,
         "unlinked_news": unlinked_news,
+        "eu_ctis_count": eu_ctis_count,
+        "eu_ctr_count": eu_ctr_count,
         "by_status": by_status,
         "by_phase": by_phase,
         "by_therapeutic_area": by_therapeutic_area,
+        "by_registry": by_registry,
         "last_ingested": last_ingested,
     }

@@ -224,6 +224,11 @@ def parse_study(study, snapshot_path=None):
         "brief_summary":       brief_summary or None,
         "has_news":            0,
         "ingested_at":         datetime.utcnow().isoformat(),
+        "registry_sources":    json.dumps(["ClinicalTrials.gov"]),
+        "all_registry_ids":    json.dumps([nct_id]) if nct_id else json.dumps([]),
+        "euct_id":             None,
+        "eudract_number":      None,
+        "eu_member_states":    None,
     }
 
 
@@ -288,7 +293,8 @@ def pull_all():
                     start_date, primary_completion, study_completion, first_posted, last_updated,
                     primary_endpoints, secondary_endpoints,
                     epro_ecoa, digital_biomarkers, dct_elements,
-                    brief_summary, has_news, ingested_at
+                    brief_summary, has_news, ingested_at,
+                    registry_sources, all_registry_ids, euct_id, eudract_number, eu_member_states
                 ) VALUES (
                     :id, :title_brief, :title_official, :registry_id, :source_url, :raw_snapshot_path,
                     :status, :phase, :study_type,
@@ -301,7 +307,8 @@ def pull_all():
                     :start_date, :primary_completion, :study_completion, :first_posted, :last_updated,
                     :primary_endpoints, :secondary_endpoints,
                     :epro_ecoa, :digital_biomarkers, :dct_elements,
-                    :brief_summary, :has_news, :ingested_at
+                    :brief_summary, :has_news, :ingested_at,
+                    :registry_sources, :all_registry_ids, :euct_id, :eudract_number, :eu_member_states
                 )
             """, trial)
             new_count += 1
