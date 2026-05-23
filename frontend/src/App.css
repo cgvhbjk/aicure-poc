@@ -203,6 +203,7 @@
   gap: 8px;
   margin-bottom: 6px;
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .btn-sm {
@@ -441,6 +442,37 @@
   letter-spacing: 0.08em;
   color: #94a3b8;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.views-save-btn {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  background: #1d4ed8;
+  color: #fff;
+  border: 1px solid #1d4ed8;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+
+.views-save-btn:hover {
+  background: #1e40af;
+}
+
+.view-dirty-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  flex-shrink: 0;
+  margin-right: 4px;
 }
 
 .views-new-btn {
@@ -750,34 +782,42 @@
   color: #1e293b;
 }
 
-/* ── Filter bar ─────────────────────────────────── */
-.filter-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+/* ── Inline filter bar (lives inside .toolbar) ────── */
+.toolbar-with-filters {
   flex-wrap: wrap;
-  padding: 5px 0 5px 2px;
-  background: transparent;
-  border-bottom: 1px solid #e2e8f0;
-  flex-shrink: 0;
-  min-height: 36px;
-  margin-bottom: 2px;
+  row-gap: 4px;
+}
+
+.filter-bar-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .filter-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 6px 3px 10px;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
   background: #eff6ff;
   border: 1px solid #bfdbfe;
-  border-radius: 20px;
-  font-size: 12px;
+  border-radius: 14px;
+  font-size: 11px;
+  line-height: 1.4;
   color: #1d4ed8;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
   transition: background 0.1s;
+  max-width: 220px;
+}
+
+.filter-pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .filter-pill:hover { background: #dbeafe; }
@@ -787,7 +827,7 @@
   border: none;
   background: none;
   color: #93c5fd;
-  font-size: 15px;
+  font-size: 14px;
   cursor: pointer;
   padding: 0;
   line-height: 1;
@@ -801,12 +841,12 @@
   flex-shrink: 0;
 }
 
-.filter-bar-sep { flex: 1; }
-
 .filter-clear-btn {
   color: #94a3b8 !important;
   border-color: transparent !important;
   font-size: 11px !important;
+  padding-left: 6px !important;
+  padding-right: 6px !important;
 }
 
 .filter-clear-btn:hover {

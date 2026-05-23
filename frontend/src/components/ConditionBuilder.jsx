@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { FILTER_FIELDS, OPERATORS_FOR_TYPE, makeCondition } from '../utils/conditions'
 
-export default function ConditionBuilder({ initialCondition, onApply, onCancel, therapeuticAreas }) {
+export default function ConditionBuilder({ initialCondition, onApply, onCancel, therapeuticAreas, countries }) {
   const firstField = FILTER_FIELDS[0]
   const [fieldKey, setFieldKey] = useState(initialCondition?.field ?? firstField.key)
   const [operator, setOperator] = useState(initialCondition?.operator ?? '')
@@ -30,9 +30,20 @@ export default function ConditionBuilder({ initialCondition, onApply, onCancel, 
     return () => document.removeEventListener('mousedown', handler)
   }, [onCancel])
 
-  const options = fieldDef.dynamic
-    ? (therapeuticAreas ?? []).map(a => ({ value: a, label: a }))
+  const dynamicSource =
+    fieldDef.dynamic === 'countries' ? (countries ?? [])
+    : fieldDef.dynamic === 'therapeutic_areas' ? (therapeuticAreas ?? [])
+    : fieldDef.dynamic === true ? (therapeuticAreas ?? [])  // legacy
+    : null
+  const options = dynamicSource
+    ? dynamicSource.map(a => ({ value: a, label: a }))
     : (fieldDef.options ?? []).map(o => ({ value: o, label: fieldDef.displayFn ? fieldDef.displayFn(o) : o }))
+
+  // Search-as-you-type inside the option list (useful for long country lists).
+  const [optionSearch, setOptionSearch] = useState('')
+  const filteredOptions = optionSearch
+    ? options.filter(o => o.label.toLowerCase().includes(optionSearch.toLowerCase()))
+    : options
 
   const handleToggleOption = (opt) => {
     const arr = Array.isArray(value) ? value : []
@@ -93,17 +104,32 @@ export default function ConditionBuilder({ initialCondition, onApply, onCancel, 
       {fieldDef.type === 'select' && (
         <div className="cond-row cond-row-options">
           <label className="cond-label">Value</label>
-          <div className="cond-options-list">
-            {options.map(opt => (
-              <label key={opt.value} className="cond-option-label">
-                <input
-                  type="checkbox"
-                  checked={Array.isArray(value) && value.includes(opt.value)}
-                  onChange={() => handleToggleOption(opt.value)}
-                />
-                {opt.label}
-              </label>
-            ))}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {options.length > 8 && (
+              <input
+                className="cond-input"
+                type="text"
+                placeholder="Search…"
+                value={optionSearch}
+                onChange={e => setOptionSearch(e.target.value)}
+                style={{ width: '100%', marginBottom: 6 }}
+              />
+            )}
+            <div className="cond-options-list">
+              {filteredOptions.map(opt => (
+                <label key={opt.value} className="cond-option-label">
+                  <input
+                    type="checkbox"
+                    checked={Array.isArray(value) && value.includes(opt.value)}
+                    onChange={() => handleToggleOption(opt.value)}
+                  />
+                  {opt.label}
+                </label>
+              ))}
+              {filteredOptions.length === 0 && (
+                <div style={{ fontSize: 12, color: '#94a3b8', padding: '4px 0' }}>No matches</div>
+              )}
+            </div>
           </div>
         </div>
       )}

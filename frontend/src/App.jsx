@@ -90,6 +90,7 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
   }, [])
 
   const therapeuticAreas = stats ? Object.keys(stats.by_therapeutic_area || {}).sort() : []
+  const countries = stats ? Object.keys(stats.by_country || {}) : []
 
   const toggle = (setFn) => (item) =>
     setFn((prev) => (prev.includes(item) ? prev.filter((x) => x !== item) : [...prev, item]))
@@ -220,6 +221,7 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
             gridApiRef={trialApiRef}
             getCurrentConditions={getCurrentConditions}
             onApplyConditions={setConditions}
+            conditions={conditions}
           />
         )}
 
@@ -320,6 +322,7 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
                 onRemoveCondition={removeCondition}
                 onClearConditions={clearConditions}
                 therapeuticAreas={therapeuticAreas}
+                countries={countries}
                 onGridReady={(api) => { trialApiRef.current = api }}
               />
             )}

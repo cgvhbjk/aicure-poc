@@ -265,7 +265,8 @@ const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: true }
 
 export default function TrialsTable({
   filters, agGridFilters, onGridReady: onGridReadyProp,
-  conditions, onAddCondition, onEditCondition, onRemoveCondition, onClearConditions, therapeuticAreas,
+  conditions, onAddCondition, onEditCondition, onRemoveCondition, onClearConditions,
+  therapeuticAreas, countries,
 }) {
   const gridRef = useRef(null)
   const [rowData, setRowData] = useState([])
@@ -306,7 +307,7 @@ export default function TrialsTable({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-      <div className="toolbar">
+      <div className="toolbar toolbar-with-filters">
         <button
           className={`btn-sm${fieldsOpen ? ' btn-active' : ''}`}
           onClick={() => setFieldsOpen(v => !v)}
@@ -314,21 +315,23 @@ export default function TrialsTable({
         >
           Fields
         </button>
+
+        <FilterBar
+          conditions={conditions || []}
+          onAdd={onAddCondition}
+          onEdit={onEditCondition}
+          onRemove={onRemoveCondition}
+          onClear={onClearConditions}
+          therapeuticAreas={therapeuticAreas}
+          countries={countries}
+        />
+
         <span className="toolbar-sep" />
         <button className="btn-sm" onClick={onExport}>Export CSV</button>
         <span className="row-count">
           {loading ? 'Loading…' : `${total.toLocaleString()} trials`}
         </span>
       </div>
-
-      <FilterBar
-        conditions={conditions || []}
-        onAdd={onAddCondition}
-        onEdit={onEditCondition}
-        onRemove={onRemoveCondition}
-        onClear={onClearConditions}
-        therapeuticAreas={therapeuticAreas}
-      />
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex' }}>
         <div className="ag-theme-alpine" style={{ flex: 1, minHeight: 0 }}>

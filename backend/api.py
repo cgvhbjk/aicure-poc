@@ -38,7 +38,7 @@ def get_trials(
     status: Optional[List[str]] = Query(default=None),
     phase: Optional[List[str]] = Query(default=None),
     therapeutic_area: Optional[List[str]] = Query(default=None),
-    country: Optional[str] = None,
+    country: Optional[List[str]] = Query(default=None),
     has_news: Optional[bool] = None,
     registry: Optional[List[str]] = Query(default=None),
     min_enrollment: Optional[int] = None,
@@ -79,8 +79,13 @@ def get_trials(
         params.extend(therapeutic_area)
 
     if country:
-        where_clauses.append("lead_country = ?")
-        params.append(country)
+        # Match against lead_country or any entry in the countries JSON array.
+        clauses = []
+        for c in country:
+            clauses.append("(lead_country = ? OR countries LIKE ?)")
+            params.append(c)
+            params.append(f"%\"{c}\"%")
+        where_clauses.append("(" + " OR ".join(clauses) + ")")
 
     if has_news is not None:
         where_clauses.append("has_news = ?")
@@ -793,6 +798,14 @@ def get_stats():
             "SELECT registry, COUNT(*) AS n FROM registry_source_records GROUP BY registry"
         ).fetchall()
     }
+    by_country = {
+        r["lead_country"]: r["n"]
+        for r in conn.execute(
+            "SELECT lead_country, COUNT(*) AS n FROM trials "
+            "WHERE lead_country IS NOT NULL AND lead_country != '' "
+            "GROUP BY lead_country ORDER BY n DESC LIMIT 40"
+        ).fetchall()
+    }
 
     last_ingested = conn.execute("SELECT MAX(ingested_at) FROM trials").fetchone()[0]
     conn.close()
@@ -808,5 +821,6 @@ def get_stats():
         "by_phase": by_phase,
         "by_therapeutic_area": by_therapeutic_area,
         "by_registry": by_registry,
+        "by_country": by_country,
         "last_ingested": last_ingested,
     }
