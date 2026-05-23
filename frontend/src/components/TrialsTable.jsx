@@ -3,6 +3,7 @@ import { AgGridReact } from 'ag-grid-react'
 import { getTrials } from '../api'
 import DetailPanel from './DetailPanel'
 import FieldsPanel from './FieldsPanel'
+import FilterBar from './FilterBar'
 
 // ── Cell renderers ────────────────────────────────────────────────────────────
 
@@ -116,6 +117,64 @@ const REGISTRY_PILL_STYLES = {
   'ClinicalTrials.gov': { background: '#dbeafe', color: '#1e40af' },
   'CTIS':               { background: '#ede9fe', color: '#6d28d9' },
   'EU-CTR':             { background: '#fef3c7', color: '#92400e' },
+  'ISRCTN':             { background: '#dcfce7', color: '#166534' },
+  'NTR':                { background: '#ccfbf1', color: '#0f766e' },
+  'ANZCTR':             { background: '#fce7f3', color: '#9d174d' },
+  'DRKS':               { background: '#fff7ed', color: '#9a3412' },
+  'jRCT':               { background: '#f0fdf4', color: '#15803d' },
+  'CRIS':               { background: '#fdf4ff', color: '#7e22ce' },
+}
+
+function RegistryIdLink({ value, baseUrl }) {
+  if (!value) return null
+  return (
+    <a href={`${baseUrl}${value}`} target="_blank" rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}>
+      {value}
+    </a>
+  )
+}
+
+function IsrctnLink({ value }) {
+  return <RegistryIdLink value={value} baseUrl="https://www.isrctn.com/" />
+}
+
+function NtrLink({ value }) {
+  return <RegistryIdLink value={value} baseUrl="https://www.trialregister.nl/trial/" />
+}
+
+function AnzctrLink({ value }) {
+  if (!value) return null
+  return (
+    <a href={`https://www.anzctr.org.au/Trial/Registration/TrialReview.aspx?ACTRN=${value}`}
+      target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+      {value}
+    </a>
+  )
+}
+
+function DrksLink({ value }) {
+  if (!value) return null
+  return (
+    <a href={`https://www.drks.de/drks_web/navigate.do?navigationId=trial.HTML&TRIAL_ID=${value}`}
+      target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+      {value}
+    </a>
+  )
+}
+
+function JrctLink({ value }) {
+  return <RegistryIdLink value={value} baseUrl="https://jrct.niph.go.jp/en-latest-data/" />
+}
+
+function CrisLink({ value }) {
+  if (!value) return null
+  return (
+    <a href={`https://cris.nih.go.kr/cris/search/detailSearch.do?seq=${value}&locale=en`}
+      target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+      {value}
+    </a>
+  )
 }
 
 function RegistryPillsCell({ value }) {
@@ -191,6 +250,12 @@ const COLUMN_DEFS = [
   { ...BASE, field: 'registry_sources',    headerName: 'Registries',         width: 200, hide: false, cellRenderer: RegistryPillsCell, filter: false },
   { ...BASE, field: 'euct_id',             headerName: 'EUCT ID',            width: 160, hide: true },
   { ...BASE, field: 'eudract_number',      headerName: 'EudraCT No.',        width: 140, hide: true },
+  { ...BASE, field: 'isrctn_id',           headerName: 'ISRCTN ID',          width: 140, hide: true,  cellRenderer: IsrctnLink },
+  { ...BASE, field: 'ntr_id',              headerName: 'NTR ID',             width: 120, hide: true,  cellRenderer: NtrLink },
+  { ...BASE, field: 'anzctr_id',           headerName: 'ANZCTR ID',          width: 130, hide: true,  cellRenderer: AnzctrLink },
+  { ...BASE, field: 'drks_id',             headerName: 'DRKS ID',            width: 120, hide: true,  cellRenderer: DrksLink },
+  { ...BASE, field: 'jrct_id',             headerName: 'jRCT ID',            width: 120, hide: true,  cellRenderer: JrctLink },
+  { ...BASE, field: 'cris_id',             headerName: 'CRIS ID',            width: 120, hide: true,  cellRenderer: CrisLink },
   { ...BASE, field: 'ingested_at',         headerName: 'Ingested',           width: 130, hide: true,  cellRenderer: DateCell },
 ]
 
@@ -198,7 +263,10 @@ const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: true }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function TrialsTable({ filters, filterOpen, onToggleFilter, onGridReady: onGridReadyProp }) {
+export default function TrialsTable({
+  filters, agGridFilters, onGridReady: onGridReadyProp,
+  conditions, onAddCondition, onEditCondition, onRemoveCondition, onClearConditions, therapeuticAreas,
+}) {
   const gridRef = useRef(null)
   const [rowData, setRowData] = useState([])
   const [loading, setLoading] = useState(false)
@@ -221,8 +289,16 @@ export default function TrialsTable({ filters, filterOpen, onToggleFilter, onGri
 
   useEffect(() => { fetchData() }, [fetchData])
 
+  useEffect(() => {
+    const api = gridRef.current?.api
+    if (!api) return
+    try { api.setFilterModel(agGridFilters || {}) } catch {}
+  }, [agGridFilters])
+
   const handleGridReady = useCallback((params) => {
     onGridReadyProp?.(params.api)
+    try { params.api.setFilterModel(agGridFilters || {}) } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onGridReadyProp])
 
   const onExport = () => gridRef.current?.api?.exportDataAsCsv()
@@ -238,19 +314,21 @@ export default function TrialsTable({ filters, filterOpen, onToggleFilter, onGri
         >
           Fields
         </button>
-        <button
-          className={`btn-sm${filterOpen ? ' btn-active' : ''}`}
-          onClick={onToggleFilter}
-          title="Toggle filter sidebar"
-        >
-          Filter
-        </button>
         <span className="toolbar-sep" />
         <button className="btn-sm" onClick={onExport}>Export CSV</button>
         <span className="row-count">
           {loading ? 'Loading…' : `${total.toLocaleString()} trials`}
         </span>
       </div>
+
+      <FilterBar
+        conditions={conditions || []}
+        onAdd={onAddCondition}
+        onEdit={onEditCondition}
+        onRemove={onRemoveCondition}
+        onClear={onClearConditions}
+        therapeuticAreas={therapeuticAreas}
+      />
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex' }}>
         <div className="ag-theme-alpine" style={{ flex: 1, minHeight: 0 }}>

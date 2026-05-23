@@ -30,7 +30,7 @@ function loadViews() {
   try { return JSON.parse(localStorage.getItem(LS_NEW) || '[]') } catch { return [] }
 }
 
-export default function ViewsSidebar({ gridApiRef }) {
+export default function ViewsSidebar({ gridApiRef, getCurrentConditions, onApplyConditions }) {
   const [views, setViews] = useState([])
   const [activeId, setActiveId] = useState('default')
   const [creatingNew, setCreatingNew] = useState(false)
@@ -55,14 +55,15 @@ export default function ViewsSidebar({ gridApiRef }) {
   const applyView = (view) => {
     setActiveId(view.id)
     const a = getApi()
-    if (!a) return
     try {
       if (view.id === 'default') {
-        a.resetColumnState()
-        a.setFilterModel({})
+        a?.resetColumnState()
+        a?.setFilterModel({})
+        onApplyConditions?.([])
       } else {
-        if (view.columnState?.length) a.applyColumnState({ state: view.columnState, applyOrder: true })
-        a.setFilterModel(view.filterModel || {})
+        if (view.columnState?.length) a?.applyColumnState({ state: view.columnState, applyOrder: true })
+        a?.setFilterModel(view.filterModel || {})
+        onApplyConditions?.(view.conditions || [])
       }
     } catch {}
   }
@@ -81,6 +82,7 @@ export default function ViewsSidebar({ gridApiRef }) {
       color: VIEW_COLORS[views.length % VIEW_COLORS.length],
       columnState,
       filterModel,
+      conditions: getCurrentConditions?.() || [],
       createdAt: new Date().toISOString(),
     }
     const next = [...views, view]
@@ -119,7 +121,8 @@ export default function ViewsSidebar({ gridApiRef }) {
     let filterModel = {}
     try { columnState = a?.getColumnState() || [] } catch {}
     try { filterModel = a?.getFilterModel() || {} } catch {}
-    const next = views.map(v => v.id === id ? { ...v, columnState, filterModel } : v)
+    const conditions = getCurrentConditions?.() || []
+    const next = views.map(v => v.id === id ? { ...v, columnState, filterModel, conditions } : v)
     setViews(next)
     persist(next)
     setMenuId(null)

@@ -111,6 +111,93 @@ def _init_db():
             match_method          TEXT,
             PRIMARY KEY (trial_id, news_id)
         );
+
+        CREATE TABLE IF NOT EXISTS organizations (
+            id                    TEXT PRIMARY KEY,
+            canonical_name        TEXT NOT NULL,
+            aliases               TEXT,
+            org_type              TEXT,
+            therapeutic_focus     TEXT,
+            regions_served        TEXT,
+            offerings             TEXT,
+            existing_integrations TEXT,
+            white_label_signal    TEXT,
+            funding_stage         TEXT,
+            website               TEXT,
+            linkedin_url          TEXT,
+            crunchbase_url        TEXT,
+            source_urls           TEXT,
+            trial_count           INTEGER DEFAULT 0,
+            last_verified         TEXT,
+            created_at            TEXT,
+            notes                 TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS organization_aliases (
+            alias                 TEXT PRIMARY KEY,
+            org_id                TEXT REFERENCES organizations(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS trial_org_links (
+            trial_id              TEXT REFERENCES trials(id),
+            org_id                TEXT REFERENCES organizations(id),
+            role                  TEXT,
+            PRIMARY KEY (trial_id, org_id, role)
+        );
+
+        CREATE TABLE IF NOT EXISTS org_contacts (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id                TEXT REFERENCES organizations(id),
+            full_name             TEXT,
+            title                 TEXT,
+            department            TEXT,
+            email                 TEXT,
+            linkedin_url          TEXT,
+            source_url            TEXT,
+            is_decision_maker     INTEGER DEFAULT 0,
+            notes                 TEXT,
+            created_at            TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_trial_org_links_org_id
+            ON trial_org_links(org_id);
+        CREATE INDEX IF NOT EXISTS idx_trial_org_links_trial_id
+            ON trial_org_links(trial_id);
+
+        CREATE TABLE IF NOT EXISTS uploads (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename          TEXT,
+            entity_type       TEXT,
+            row_count         INTEGER,
+            matched_count     INTEGER,
+            new_count         INTEGER,
+            skipped_count     INTEGER,
+            uploaded_at       TEXT,
+            uploaded_by       TEXT,
+            notes             TEXT,
+            file_path         TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS merge_candidates (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type       TEXT,
+            record_a_id       TEXT,
+            record_b_id       TEXT,
+            confidence        REAL,
+            match_fields      TEXT,
+            match_scores      TEXT,
+            status            TEXT DEFAULT 'PENDING',
+            reviewed_by       TEXT,
+            reviewed_at       TEXT,
+            merged_into       TEXT,
+            snooze_until      TEXT,
+            created_at        TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_merge_candidates_status
+            ON merge_candidates(status);
+        CREATE INDEX IF NOT EXISTS idx_merge_candidates_entity
+            ON merge_candidates(entity_type, status);
     """)
     conn.commit()
     for alter in [
@@ -120,6 +207,12 @@ def _init_db():
         "ALTER TABLE trials ADD COLUMN registry_sources TEXT DEFAULT '[\"ClinicalTrials.gov\"]'",
         "ALTER TABLE trials ADD COLUMN all_registry_ids TEXT",
         "ALTER TABLE trials ADD COLUMN eu_member_states TEXT",
+        "ALTER TABLE trials ADD COLUMN isrctn_id TEXT",
+        "ALTER TABLE trials ADD COLUMN ntr_id TEXT",
+        "ALTER TABLE trials ADD COLUMN anzctr_id TEXT",
+        "ALTER TABLE trials ADD COLUMN drks_id TEXT",
+        "ALTER TABLE trials ADD COLUMN jrct_id TEXT",
+        "ALTER TABLE trials ADD COLUMN cris_id TEXT",
     ]:
         try:
             conn.execute(alter)

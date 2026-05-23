@@ -8,6 +8,8 @@ venv/
 
 # Snapshots are large generated JSON files; DB is committed so deploys have data
 backend/data/snapshots/
+backend/data/uploads/
+backend/data/clinical_trials.db
 
 # Node
 node_modules/

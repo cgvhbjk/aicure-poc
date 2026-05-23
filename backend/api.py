@@ -3,11 +3,19 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fastapi import FastAPI, Query
+import re
+from datetime import datetime, timedelta
+
+from fastapi import FastAPI, Query, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List
+from pydantic import BaseModel
 
 from db import get_connection
+
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+_UPLOADS_DIR = os.path.join(_BACKEND_DIR, "data", "uploads")
+os.makedirs(_UPLOADS_DIR, exist_ok=True)
 
 app = FastAPI(title="AiCure POC API")
 
@@ -33,6 +41,12 @@ def get_trials(
     country: Optional[str] = None,
     has_news: Optional[bool] = None,
     registry: Optional[List[str]] = Query(default=None),
+    min_enrollment: Optional[int] = None,
+    max_enrollment: Optional[int] = None,
+    start_date_from: Optional[str] = None,
+    start_date_to: Optional[str] = None,
+    completion_date_from: Optional[str] = None,
+    completion_date_to: Optional[str] = None,
     page: int = 1,
     page_size: int = 100,
 ):
@@ -73,10 +87,33 @@ def get_trials(
         params.append(1 if has_news else 0)
 
     if registry:
-        # Match any trial whose registry_sources JSON array contains at least one of the selected registries
         reg_clauses = " OR ".join(["registry_sources LIKE ?"] * len(registry))
         where_clauses.append(f"({reg_clauses})")
         params.extend([f"%{r}%" for r in registry])
+
+    if min_enrollment is not None:
+        where_clauses.append("CAST(enrollment AS INTEGER) >= ?")
+        params.append(min_enrollment)
+
+    if max_enrollment is not None:
+        where_clauses.append("CAST(enrollment AS INTEGER) <= ?")
+        params.append(max_enrollment)
+
+    if start_date_from:
+        where_clauses.append("start_date >= ?")
+        params.append(start_date_from)
+
+    if start_date_to:
+        where_clauses.append("start_date <= ?")
+        params.append(start_date_to)
+
+    if completion_date_from:
+        where_clauses.append("primary_completion >= ?")
+        params.append(completion_date_from)
+
+    if completion_date_to:
+        where_clauses.append("primary_completion <= ?")
+        params.append(completion_date_to)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -192,6 +229,532 @@ def get_trial_news(nct_id: str):
     ).fetchall()
     conn.close()
     return [row_to_dict(r) for r in rows]
+
+
+class OrgUpdate(BaseModel):
+    org_type: Optional[str] = None
+    white_label_signal: Optional[str] = None
+    funding_stage: Optional[str] = None
+    offerings: Optional[str] = None
+    notes: Optional[str] = None
+    website: Optional[str] = None
+    linkedin_url: Optional[str] = None
+
+
+class ContactCreate(BaseModel):
+    full_name: str
+    title: Optional[str] = None
+    department: Optional[str] = None
+    email: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    source_url: Optional[str] = None
+    is_decision_maker: Optional[int] = 0
+    notes: Optional[str] = None
+
+
+_PATCHABLE_ORG_FIELDS = {
+    "org_type", "white_label_signal", "funding_stage", "offerings",
+    "notes", "website", "linkedin_url",
+}
+
+
+@app.get("/orgs")
+def get_orgs(
+    q: Optional[str] = None,
+    org_type: Optional[List[str]] = Query(default=None),
+    therapeutic_focus: Optional[List[str]] = Query(default=None),
+    white_label: Optional[str] = None,
+    has_trials: Optional[bool] = None,
+    page: int = 1,
+    page_size: int = 100,
+):
+    page_size = min(page_size, 500)
+    conn = get_connection()
+
+    where_clauses = []
+    params = []
+
+    if q:
+        where_clauses.append(
+            "(LOWER(o.canonical_name) LIKE ? OR LOWER(o.aliases) LIKE ? OR LOWER(o.offerings) LIKE ?)"
+        )
+        q_like = f"%{q.lower()}%"
+        params.extend([q_like, q_like, q_like])
+
+    if org_type:
+        placeholders = ",".join("?" * len(org_type))
+        where_clauses.append(f"o.org_type IN ({placeholders})")
+        params.extend(org_type)
+
+    if therapeutic_focus:
+        tf_clauses = " OR ".join(["o.therapeutic_focus LIKE ?"] * len(therapeutic_focus))
+        where_clauses.append(f"({tf_clauses})")
+        params.extend([f"%{tf}%" for tf in therapeutic_focus])
+
+    if white_label:
+        where_clauses.append("o.white_label_signal = ?")
+        params.append(white_label)
+
+    if has_trials:
+        where_clauses.append("o.trial_count > 0")
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    total = conn.execute(f"SELECT COUNT(*) FROM organizations o {where_sql}", params).fetchone()[0]
+    offset = (page - 1) * page_size
+    rows = conn.execute(
+        f"SELECT o.* FROM organizations o {where_sql} ORDER BY o.trial_count DESC, o.canonical_name LIMIT ? OFFSET ?",
+        params + [page_size, offset],
+    ).fetchall()
+
+    conn.close()
+    return {"total": total, "page": page, "results": [row_to_dict(r) for r in rows]}
+
+
+@app.get("/orgs/{org_id}")
+def get_org(org_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return row_to_dict(row)
+
+
+@app.get("/orgs/{org_id}/trials")
+def get_org_trials(org_id: str):
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT t.*, tol.role
+        FROM trials t
+        JOIN trial_org_links tol ON t.id = tol.trial_id
+        WHERE tol.org_id = ?
+        ORDER BY t.last_updated DESC
+        """,
+        (org_id,),
+    ).fetchall()
+    conn.close()
+    return [row_to_dict(r) for r in rows]
+
+
+@app.get("/orgs/{org_id}/contacts")
+def get_org_contacts(org_id: str):
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM org_contacts WHERE org_id = ? ORDER BY is_decision_maker DESC, full_name",
+        (org_id,),
+    ).fetchall()
+    conn.close()
+    return [row_to_dict(r) for r in rows]
+
+
+@app.post("/orgs/{org_id}/contacts")
+def add_org_contact(org_id: str, body: ContactCreate):
+    conn = get_connection()
+    org = conn.execute("SELECT id FROM organizations WHERE id = ?", (org_id,)).fetchone()
+    if not org:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    from datetime import datetime
+    cur = conn.execute(
+        """
+        INSERT INTO org_contacts
+            (org_id, full_name, title, department, email, linkedin_url, source_url, is_decision_maker, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            org_id, body.full_name, body.title, body.department, body.email,
+            body.linkedin_url, body.source_url, body.is_decision_maker or 0,
+            body.notes, datetime.utcnow().isoformat(),
+        ),
+    )
+    new_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM org_contacts WHERE id = ?", (new_id,)).fetchone()
+    conn.close()
+    return row_to_dict(row)
+
+
+@app.patch("/orgs/{org_id}")
+def patch_org(org_id: str, body: OrgUpdate):
+    conn = get_connection()
+    org = conn.execute("SELECT id FROM organizations WHERE id = ?", (org_id,)).fetchone()
+    if not org:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    updates = {k: v for k, v in body.model_dump().items() if v is not None and k in _PATCHABLE_ORG_FIELDS}
+    if not updates:
+        conn.close()
+        row = conn.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchone()
+        return row_to_dict(row)
+
+    set_clauses = ", ".join(f"{k} = ?" for k in updates)
+    conn.execute(
+        f"UPDATE organizations SET {set_clauses} WHERE id = ?",
+        list(updates.values()) + [org_id],
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchone()
+    conn.close()
+    return row_to_dict(row)
+
+
+@app.get("/relationships")
+def get_relationships(
+    org_id: Optional[str] = None,
+    therapeutic_area: Optional[List[str]] = Query(default=None),
+    status: Optional[List[str]] = Query(default=None),
+    phase: Optional[List[str]] = Query(default=None),
+):
+    conn = get_connection()
+
+    # Determine which orgs to show
+    if org_id:
+        orgs = conn.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchall()
+    else:
+        orgs = conn.execute(
+            "SELECT * FROM organizations ORDER BY trial_count DESC LIMIT 20"
+        ).fetchall()
+
+    org_ids = [o["id"] for o in orgs]
+    if not org_ids:
+        conn.close()
+        return {"nodes": [], "edges": [], "total_nodes": 0}
+
+    # Get trial links for these orgs
+    placeholders = ",".join("?" * len(org_ids))
+    links = conn.execute(
+        f"SELECT trial_id, org_id, role FROM trial_org_links WHERE org_id IN ({placeholders})",
+        org_ids,
+    ).fetchall()
+
+    trial_ids = list({lnk["trial_id"] for lnk in links})
+    if not trial_ids:
+        conn.close()
+        org_nodes = [
+            {"id": o["id"], "label": o["canonical_name"], "type": o["org_type"] or "OTHER", "trial_count": o["trial_count"] or 0}
+            for o in orgs
+        ]
+        return {"nodes": org_nodes, "edges": [], "total_nodes": len(org_nodes)}
+
+    # Apply trial filters — default to RECRUITING + NOT_YET_RECRUITING
+    status_filter = status if status else ["RECRUITING", "NOT_YET_RECRUITING"]
+    t_ph = ",".join("?" * len(trial_ids))
+    s_ph = ",".join("?" * len(status_filter))
+    trial_where = [f"id IN ({t_ph})", f"status IN ({s_ph})"]
+    trial_params = trial_ids + status_filter
+
+    if therapeutic_area:
+        ta_ph = ",".join("?" * len(therapeutic_area))
+        trial_where.append(f"therapeutic_area IN ({ta_ph})")
+        trial_params.extend(therapeutic_area)
+
+    if phase:
+        ph_ph = ",".join("?" * len(phase))
+        trial_where.append(f"phase IN ({ph_ph})")
+        trial_params.extend(phase)
+
+    trials = conn.execute(
+        f"SELECT id, title_brief, status, phase, therapeutic_area FROM trials WHERE {' AND '.join(trial_where)}",
+        trial_params,
+    ).fetchall()
+    conn.close()
+
+    valid_trial_ids = {t["id"] for t in trials}
+
+    org_nodes = [
+        {"id": o["id"], "label": o["canonical_name"], "type": o["org_type"] or "OTHER", "trial_count": o["trial_count"] or 0}
+        for o in orgs
+    ]
+    trial_nodes = [
+        {"id": t["id"], "label": t["title_brief"] or t["id"], "type": "TRIAL", "status": t["status"], "phase": t["phase"]}
+        for t in trials
+    ]
+    edges = [
+        {"source": lnk["org_id"], "target": lnk["trial_id"], "role": lnk["role"]}
+        for lnk in links
+        if lnk["trial_id"] in valid_trial_ids
+    ]
+
+    all_nodes = org_nodes + trial_nodes
+    return {
+        "nodes": all_nodes,
+        "edges": edges,
+        "total_nodes": len(all_nodes),
+    }
+
+
+class MergeConfirm(BaseModel):
+    reviewed_by: Optional[str] = ""
+    surviving_id: Optional[str] = None
+
+
+class MergeReview(BaseModel):
+    reviewed_by: Optional[str] = ""
+
+
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+@app.post("/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    entity_type: str = Form(...),
+    analyst_name: str = Form(default=""),
+    notes: str = Form(default=""),
+):
+    content = await file.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+
+    valid_types = ("trials", "organizations", "contacts")
+    if entity_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"entity_type must be one of {list(valid_types)}")
+
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    safe_name = re.sub(r"[^\w.\-]", "_", file.filename or "upload")
+    save_path = os.path.join(_UPLOADS_DIR, f"{ts}_{safe_name}")
+    with open(save_path, "wb") as fh:
+        fh.write(content)
+
+    from upload_processor import process_upload
+    result = process_upload(content, file.filename or "", entity_type)
+
+    conn = get_connection()
+    cur = conn.execute(
+        """INSERT INTO uploads
+           (filename, entity_type, row_count, matched_count, new_count, skipped_count,
+            uploaded_at, uploaded_by, notes, file_path)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (file.filename, entity_type,
+         result["row_count"], result["matched"], result["inserted"], result["skipped"],
+         datetime.utcnow().isoformat(), analyst_name, notes, save_path),
+    )
+    upload_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    errors = result.get("errors", [])
+    return {
+        "upload_id": upload_id,
+        "filename": file.filename,
+        "row_count": result["row_count"],
+        "matched": result["matched"],
+        "inserted": result["inserted"],
+        "skipped": result["skipped"],
+        "errors": errors[:50],
+        "error_count": len(errors),
+        "merge_candidates": result.get("merge_candidates", 0),
+        "preview": result.get("preview", []),
+    }
+
+
+@app.get("/merges")
+def get_merges(
+    entity_type: Optional[str] = None,
+    status: str = "PENDING",
+    min_confidence: float = 0.0,
+    max_confidence: float = 1.0,
+    page: int = 1,
+    page_size: int = 50,
+):
+    page_size = min(page_size, 200)
+    conn = get_connection()
+
+    where = ["mc.confidence >= ?", "mc.confidence <= ?"]
+    params: list = [min_confidence, max_confidence]
+
+    if status == "PENDING":
+        where.append("(mc.status = 'PENDING' OR (mc.status = 'SNOOZED' AND mc.snooze_until < ?))")
+        params.append(datetime.utcnow().isoformat())
+    else:
+        where.append("mc.status = ?")
+        params.append(status)
+
+    if entity_type:
+        where.append("mc.entity_type = ?")
+        params.append(entity_type)
+
+    where_sql = "WHERE " + " AND ".join(where)
+    total = conn.execute(f"SELECT COUNT(*) FROM merge_candidates mc {where_sql}", params).fetchone()[0]
+    offset = (page - 1) * page_size
+    rows = conn.execute(
+        f"""SELECT mc.* FROM merge_candidates mc {where_sql}
+            ORDER BY mc.confidence DESC, mc.created_at DESC LIMIT ? OFFSET ?""",
+        params + [page_size, offset],
+    ).fetchall()
+
+    candidates = [row_to_dict(r) for r in rows]
+
+    # Batch-fetch entity records
+    trial_ids, org_ids = set(), set()
+    for c in candidates:
+        if c["entity_type"] == "trials":
+            trial_ids.update([c["record_a_id"], c["record_b_id"]])
+        else:
+            org_ids.update([c["record_a_id"], c["record_b_id"]])
+
+    trials_map, orgs_map = {}, {}
+    if trial_ids:
+        ph = ",".join("?" * len(trial_ids))
+        for r in conn.execute(f"SELECT * FROM trials WHERE id IN ({ph})", list(trial_ids)).fetchall():
+            trials_map[r["id"]] = row_to_dict(r)
+    if org_ids:
+        ph = ",".join("?" * len(org_ids))
+        for r in conn.execute(f"SELECT * FROM organizations WHERE id IN ({ph})", list(org_ids)).fetchall():
+            orgs_map[r["id"]] = row_to_dict(r)
+
+    conn.close()
+
+    for c in candidates:
+        if c["entity_type"] == "trials":
+            c["record_a"] = trials_map.get(c["record_a_id"])
+            c["record_b"] = trials_map.get(c["record_b_id"])
+        else:
+            c["record_a"] = orgs_map.get(c["record_a_id"])
+            c["record_b"] = orgs_map.get(c["record_b_id"])
+
+    return {"total": total, "page": page, "results": candidates}
+
+
+@app.post("/merges/{merge_id}/confirm")
+def confirm_merge(merge_id: int, body: MergeConfirm):
+    conn = get_connection()
+    try:
+        mc = conn.execute("SELECT * FROM merge_candidates WHERE id = ?", (merge_id,)).fetchone()
+        if not mc:
+            raise HTTPException(status_code=404, detail="Merge candidate not found")
+
+        survivor_id = body.surviving_id or mc["record_a_id"]
+        loser_id = mc["record_b_id"] if survivor_id == mc["record_a_id"] else mc["record_a_id"]
+
+        if mc["entity_type"] == "trials":
+            survivor = conn.execute("SELECT * FROM trials WHERE id = ?", (survivor_id,)).fetchone()
+            loser = conn.execute("SELECT * FROM trials WHERE id = ?", (loser_id,)).fetchone()
+            if not survivor:
+                raise HTTPException(status_code=400, detail=f"Survivor trial {survivor_id} not found")
+            if loser:
+                # Transfer registry info
+                import json as _json
+                s_sources = _json.loads(survivor["registry_sources"] or "[]")
+                s_ids = _json.loads(survivor["all_registry_ids"] or "[]")
+                b_sources = _json.loads(loser["registry_sources"] or "[]")
+                b_ids = _json.loads(loser["all_registry_ids"] or "[]")
+                for src in b_sources:
+                    if src not in s_sources:
+                        s_sources.append(src)
+                for rid in b_ids + [loser_id]:
+                    if rid not in s_ids:
+                        s_ids.append(rid)
+
+                from merge_detector import _id_col_for
+                id_col, reg_val = _id_col_for(loser_id)
+                extra_sql = f", {id_col} = ?" if id_col else ""
+                extra_params = [reg_val] if id_col else []
+                conn.execute(
+                    f"UPDATE trials SET registry_sources = ?, all_registry_ids = ?{extra_sql} WHERE id = ?",
+                    [_json.dumps(s_sources), _json.dumps(s_ids)] + extra_params + [survivor_id],
+                )
+
+                # Reassign FK references
+                conn.execute("UPDATE registry_source_records SET trial_id = ? WHERE trial_id = ?", (survivor_id, loser_id))
+                conn.execute("INSERT OR IGNORE INTO trial_org_links (trial_id, org_id, role) SELECT ?, org_id, role FROM trial_org_links WHERE trial_id = ?", (survivor_id, loser_id))
+                conn.execute("DELETE FROM trial_org_links WHERE trial_id = ?", (loser_id,))
+                conn.execute("INSERT OR IGNORE INTO trial_news_links (trial_id, news_id, match_method) SELECT ?, news_id, match_method FROM trial_news_links WHERE trial_id = ?", (survivor_id, loser_id))
+                conn.execute("DELETE FROM trial_news_links WHERE trial_id = ?", (loser_id,))
+                conn.execute("DELETE FROM trials WHERE id = ?", (loser_id,))
+
+        now = datetime.utcnow().isoformat()
+        conn.execute(
+            """UPDATE merge_candidates SET status = 'CONFIRMED_MERGE', reviewed_by = ?,
+               reviewed_at = ?, merged_into = ? WHERE id = ?""",
+            (body.reviewed_by, now, survivor_id, merge_id),
+        )
+        conn.commit()
+        return {"status": "ok", "merged_into": survivor_id}
+    except HTTPException:
+        conn.rollback()
+        conn.close()
+        raise
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.post("/merges/{merge_id}/reject")
+def reject_merge(merge_id: int, body: MergeReview):
+    conn = get_connection()
+    mc = conn.execute("SELECT id FROM merge_candidates WHERE id = ?", (merge_id,)).fetchone()
+    if not mc:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Not found")
+    conn.execute(
+        "UPDATE merge_candidates SET status = 'REJECTED', reviewed_by = ?, reviewed_at = ? WHERE id = ?",
+        (body.reviewed_by, datetime.utcnow().isoformat(), merge_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.post("/merges/{merge_id}/snooze")
+def snooze_merge(merge_id: int):
+    conn = get_connection()
+    mc = conn.execute("SELECT id FROM merge_candidates WHERE id = ?", (merge_id,)).fetchone()
+    if not mc:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Not found")
+    snooze_until = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    conn.execute(
+        "UPDATE merge_candidates SET status = 'SNOOZED', snooze_until = ? WHERE id = ?",
+        (snooze_until, merge_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "snooze_until": snooze_until}
+
+
+@app.get("/merges/stats")
+def get_merge_stats():
+    conn = get_connection()
+    now = datetime.utcnow().isoformat()
+    week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+
+    pending = conn.execute(
+        "SELECT COUNT(*) FROM merge_candidates WHERE status = 'PENDING'"
+    ).fetchone()[0]
+    snoozed = conn.execute(
+        "SELECT COUNT(*) FROM merge_candidates WHERE status = 'SNOOZED' AND snooze_until > ?",
+        (now,)
+    ).fetchone()[0]
+    confirmed_week = conn.execute(
+        "SELECT COUNT(*) FROM merge_candidates WHERE status = 'CONFIRMED_MERGE' AND reviewed_at >= ?",
+        (week_ago,)
+    ).fetchone()[0]
+    rejected_week = conn.execute(
+        "SELECT COUNT(*) FROM merge_candidates WHERE status = 'REJECTED' AND reviewed_at >= ?",
+        (week_ago,)
+    ).fetchone()[0]
+    auto_merged = conn.execute(
+        "SELECT COUNT(*) FROM merge_candidates WHERE status = 'CONFIRMED_MERGE' AND (reviewed_by IS NULL OR reviewed_by = '')"
+    ).fetchone()[0]
+    conn.close()
+
+    return {
+        "pending": pending,
+        "snoozed": snoozed,
+        "confirmed_this_week": confirmed_week,
+        "rejected_this_week": rejected_week,
+        "auto_merged": auto_merged,
+    }
 
 
 @app.get("/stats")
