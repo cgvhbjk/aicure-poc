@@ -264,7 +264,7 @@ const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: true }
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function TrialsTable({
-  filters, agGridFilters, onGridReady: onGridReadyProp,
+  filters, agGridFilters, onGridReady: onGridReadyProp, onGridStateChange,
   conditions, onAddCondition, onEditCondition, onRemoveCondition, onClearConditions,
   therapeuticAreas, countries,
 }) {
@@ -299,8 +299,18 @@ export default function TrialsTable({
   const handleGridReady = useCallback((params) => {
     onGridReadyProp?.(params.api)
     try { params.api.setFilterModel(agGridFilters || {}) } catch {}
+
+    // Bubble grid-state mutations up so the active view can auto-save.
+    const bump = () => onGridStateChange?.()
+    const events = [
+      'columnVisible', 'columnMoved', 'columnPinned', 'columnResized',
+      'sortChanged', 'filterChanged',
+    ]
+    events.forEach(ev => {
+      try { params.api.addEventListener(ev, bump) } catch {}
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onGridReadyProp])
+  }, [onGridReadyProp, onGridStateChange])
 
   const onExport = () => gridRef.current?.api?.exportDataAsCsv()
   const onRowClicked = (e) => setSelectedTrial(e.data)

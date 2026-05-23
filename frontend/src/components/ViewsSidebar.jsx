@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { v4 as uuidv4 } from 'uuid'
-import { fingerprint } from '../utils/conditions'
 
 const VIEW_COLORS = [
   '#4f46e5', '#0891b2', '#16a34a', '#d97706',
@@ -10,6 +9,7 @@ const VIEW_COLORS = [
 const LS_NEW = 'aicure_saved_views_v2'
 const LS_OLD = 'aicure_saved_views'
 const LS_ACTIVE = 'aicure_active_view_id'
+const LS_SESSION = 'aicure_session_state'  // last-applied state for default Grid
 
 function loadViews() {
   const oldRaw = localStorage.getItem(LS_OLD)
@@ -37,7 +37,14 @@ function loadActiveId() {
   return localStorage.getItem(LS_ACTIVE) || 'default'
 }
 
-export default function ViewsSidebar({ gridApiRef, getCurrentConditions, onApplyConditions, conditions }) {
+function loadSession() {
+  try { return JSON.parse(localStorage.getItem(LS_SESSION) || 'null') } catch { return null }
+}
+
+export default function ViewsSidebar({
+  gridApiRef, getCurrentConditions, onApplyConditions,
+  conditions, gridStateBump,
+}) {
   const [views, setViews] = useState([])
   const [activeId, setActiveIdState] = useState('default')
   const [creatingNew, setCreatingNew] = useState(false)
@@ -47,16 +54,48 @@ export default function ViewsSidebar({ gridApiRef, getCurrentConditions, onApply
   const [menuId, setMenuId] = useState(null)
   const newInputRef = useRef(null)
   const restoringRef = useRef(false)
-
-  useEffect(() => {
-    setViews(loadViews())
-    setActiveIdState(loadActiveId())
-  }, [])
+  const mountedRef = useRef(false)
+  // Mirror of activeId/views for the auto-save effect to avoid stale closures.
+  const viewsRef = useRef([])
+  const activeIdRef = useRef('default')
+  useEffect(() => { viewsRef.current = views }, [views])
+  useEffect(() => { activeIdRef.current = activeId }, [activeId])
 
   const setActiveId = (id) => {
     setActiveIdState(id)
     try { localStorage.setItem(LS_ACTIVE, id) } catch {}
   }
+
+  // Initial load + state restoration.
+  useEffect(() => {
+    const v = loadViews()
+    setViews(v)
+    const aid = loadActiveId()
+    setActiveIdState(aid)
+
+    // Defer restoration to next tick so the grid API is ready.
+    setTimeout(() => {
+      const found = v.find(x => x.id === aid)
+      if (found) {
+        restoringRef.current = true
+        applyStateToGrid(found)
+        onApplyConditions?.(found.conditions || [])
+        setTimeout(() => { restoringRef.current = false; mountedRef.current = true }, 60)
+      } else {
+        // Default Grid — restore session state if present
+        const sess = loadSession()
+        if (sess) {
+          restoringRef.current = true
+          applyStateToGrid(sess)
+          onApplyConditions?.(sess.conditions || [])
+          setTimeout(() => { restoringRef.current = false; mountedRef.current = true }, 60)
+        } else {
+          mountedRef.current = true
+        }
+      }
+    }, 50)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     const close = (e) => { if (!e.target.closest?.('.view-menu-wrap')) setMenuId(null) }
@@ -80,23 +119,45 @@ export default function ViewsSidebar({ gridApiRef, getCurrentConditions, onApply
     }
   }
 
+  const applyStateToGrid = (snap) => {
+    const a = getApi()
+    try {
+      if (snap.columnState?.length) a?.applyColumnState({ state: snap.columnState, applyOrder: true })
+      else a?.resetColumnState()
+      a?.setFilterModel(snap.filterModel || {})
+    } catch {}
+  }
+
+  // Auto-save effect: whenever conditions or grid state change, persist either
+  // to the active named view or to the session state (Default Grid).
+  useEffect(() => {
+    if (!mountedRef.current) return
+    if (restoringRef.current) return
+    const aid = activeIdRef.current
+    const snap = captureState()
+    if (aid === 'default') {
+      try { localStorage.setItem(LS_SESSION, JSON.stringify(snap)) } catch {}
+    } else {
+      const next = viewsRef.current.map(v => v.id === aid ? { ...v, ...snap } : v)
+      setViews(next)
+      persist(next)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conditions, gridStateBump])
+
   const applyView = (view) => {
     setActiveId(view.id)
     restoringRef.current = true
-    const a = getApi()
-    try {
-      if (view.id === 'default') {
-        a?.resetColumnState()
-        a?.setFilterModel({})
-        onApplyConditions?.([])
-      } else {
-        if (view.columnState?.length) a?.applyColumnState({ state: view.columnState, applyOrder: true })
-        a?.setFilterModel(view.filterModel || {})
-        onApplyConditions?.(view.conditions || [])
-      }
-    } catch {}
-    // Release the restoring flag after the conditions state update has propagated.
-    setTimeout(() => { restoringRef.current = false }, 0)
+    if (view.id === 'default') {
+      const a = getApi()
+      try { a?.resetColumnState(); a?.setFilterModel({}) } catch {}
+      onApplyConditions?.([])
+      try { localStorage.removeItem(LS_SESSION) } catch {}
+    } else {
+      applyStateToGrid(view)
+      onApplyConditions?.(view.conditions || [])
+    }
+    setTimeout(() => { restoringRef.current = false }, 60)
   }
 
   const createView = () => {
@@ -116,6 +177,8 @@ export default function ViewsSidebar({ gridApiRef, getCurrentConditions, onApply
     setActiveId(view.id)
     setCreatingNew(false)
     setNewName('')
+    // Once the named view exists, drop the Grid session so it doesn't shadow.
+    try { localStorage.removeItem(LS_SESSION) } catch {}
   }
 
   const deleteView = (id) => {
@@ -140,14 +203,6 @@ export default function ViewsSidebar({ gridApiRef, getCurrentConditions, onApply
     setMenuId(null)
   }
 
-  const saveToView = (id) => {
-    const snap = captureState()
-    const next = views.map(v => v.id === id ? { ...v, ...snap } : v)
-    setViews(next)
-    persist(next)
-    setMenuId(null)
-  }
-
   const confirmRename = (id) => {
     const name = renameVal.trim()
     if (name) {
@@ -165,31 +220,28 @@ export default function ViewsSidebar({ gridApiRef, getCurrentConditions, onApply
     setTimeout(() => newInputRef.current?.focus(), 40)
   }
 
-  // Dirty detection: compare the active view's saved conditions to current.
-  // (Grid state changes are too noisy to track here; the "Save" action covers
-  // them.) We re-compute whenever conditions change.
-  const activeView = views.find(v => v.id === activeId)
-  const isDirty = useMemo(() => {
-    if (!activeView) return (conditions || []).length > 0  // Grid (default) with filters = dirty
-    return fingerprint(activeView.conditions || []) !== fingerprint(conditions || [])
-  }, [activeView, conditions])
-
-  const handleSaveActive = () => {
-    if (!activeView) {
-      // Active view is "Grid" / default — prompt to save as a new view instead.
-      startCreate()
-      return
-    }
-    saveToView(activeView.id)
+  const sessionHasState = () => {
+    const s = loadSession()
+    if (!s) return false
+    return (s.conditions?.length > 0) || Object.keys(s.filterModel || {}).length > 0 || (s.columnState?.length > 0)
   }
+
+  // Indicator: only used on Default Grid to surface "you have unsaved scratch
+  // state — save it as a named view." Named views auto-save, so they're never
+  // dirty.
+  const showGridSavePrompt = useMemo(() => {
+    if (activeId !== 'default') return false
+    return (conditions || []).length > 0 || sessionHasState()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, conditions, gridStateBump])
 
   return (
     <div className="views-sidebar">
       <div className="views-sidebar-header">
         <span>Views</span>
-        {isDirty && (
-          <button className="views-save-btn" onClick={handleSaveActive} title="Save current filters to view">
-            Save{activeView ? '' : ' as…'}
+        {showGridSavePrompt && (
+          <button className="views-save-btn" onClick={startCreate} title="Save current state as a new view">
+            Save as…
           </button>
         )}
       </div>
@@ -203,60 +255,53 @@ export default function ViewsSidebar({ gridApiRef, getCurrentConditions, onApply
       >
         <span className="view-dot" style={{ background: '#64748b' }} />
         <span className="view-row-name">Grid</span>
-        {activeId === 'default' && isDirty && <span className="view-dirty-dot" title="Unsaved changes" />}
       </div>
 
-      {/* User-saved views */}
-      {views.map((view) => {
-        const rowDirty = activeId === view.id && isDirty
-        return (
-          <div
-            key={view.id}
-            className={`view-row${activeId === view.id ? ' active' : ''}`}
-            onClick={() => applyView(view)}
-          >
-            <span className="view-dot" style={{ background: view.color }} />
+      {/* User-saved views — auto-saved on edits */}
+      {views.map((view) => (
+        <div
+          key={view.id}
+          className={`view-row${activeId === view.id ? ' active' : ''}`}
+          onClick={() => applyView(view)}
+        >
+          <span className="view-dot" style={{ background: view.color }} />
 
-            {renamingId === view.id ? (
-              <input
-                className="view-inline-input"
-                value={renameVal}
-                onChange={(e) => setRenameVal(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') confirmRename(view.id)
-                  if (e.key === 'Escape') { setRenamingId(null); setRenameVal('') }
-                }}
-                onBlur={() => confirmRename(view.id)}
-                autoFocus
-                onClick={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <span className="view-row-name">{view.name}</span>
+          {renamingId === view.id ? (
+            <input
+              className="view-inline-input"
+              value={renameVal}
+              onChange={(e) => setRenameVal(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') confirmRename(view.id)
+                if (e.key === 'Escape') { setRenamingId(null); setRenameVal('') }
+              }}
+              onBlur={() => confirmRename(view.id)}
+              autoFocus
+              onClick={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <span className="view-row-name">{view.name}</span>
+          )}
+
+          <div className="view-menu-wrap" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="view-menu-btn"
+              onClick={() => setMenuId(menuId === view.id ? null : view.id)}
+            >
+              …
+            </button>
+            {menuId === view.id && (
+              <div className="view-menu-dropdown">
+                <button onClick={() => { setRenamingId(view.id); setRenameVal(view.name); setMenuId(null) }}>
+                  Rename
+                </button>
+                <button onClick={() => duplicateView(view)}>Duplicate</button>
+                <button className="view-menu-danger" onClick={() => deleteView(view.id)}>Delete</button>
+              </div>
             )}
-
-            {rowDirty && <span className="view-dirty-dot" title="Unsaved changes" />}
-
-            <div className="view-menu-wrap" onClick={(e) => e.stopPropagation()}>
-              <button
-                className="view-menu-btn"
-                onClick={() => setMenuId(menuId === view.id ? null : view.id)}
-              >
-                …
-              </button>
-              {menuId === view.id && (
-                <div className="view-menu-dropdown">
-                  <button onClick={() => { setRenamingId(view.id); setRenameVal(view.name); setMenuId(null) }}>
-                    Rename
-                  </button>
-                  <button onClick={() => saveToView(view.id)}>Save current state</button>
-                  <button onClick={() => duplicateView(view)}>Duplicate</button>
-                  <button className="view-menu-danger" onClick={() => deleteView(view.id)}>Delete</button>
-                </div>
-              )}
-            </div>
           </div>
-        )
-      })}
+        </div>
+      ))}
 
       {/* New view input row */}
       {creatingNew && (

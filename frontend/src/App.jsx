@@ -75,6 +75,10 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
   const [pendingMergeCount, setPendingMergeCount] = useState(null)
 
   const trialApiRef = useRef(null)
+  // Bumped whenever AG Grid column/sort/filter state mutates, so ViewsSidebar
+  // can react to changes that don't live in React state.
+  const [gridStateBump, setGridStateBump] = useState(0)
+  const bumpGridState = useCallback(() => setGridStateBump(v => v + 1), [])
   const debouncedSearch = useDebounce(searchText, 400)
 
   // Condition handlers
@@ -222,6 +226,7 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
             getCurrentConditions={getCurrentConditions}
             onApplyConditions={setConditions}
             conditions={conditions}
+            gridStateBump={gridStateBump}
           />
         )}
 
@@ -324,6 +329,7 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
                 therapeuticAreas={therapeuticAreas}
                 countries={countries}
                 onGridReady={(api) => { trialApiRef.current = api }}
+                onGridStateChange={bumpGridState}
               />
             )}
             {activeTab === 'news' && (
