@@ -1,11 +1,8 @@
 # Render configuration — single web service hosting both the FastAPI backend
 # and the built React frontend. Free tier.
 #
-# How it works:
-#   - buildCommand installs Node deps, builds the React app, installs Python
-#     deps, then runs the ingest pipeline so the SQLite DB is populated.
-#   - startCommand runs uvicorn. FastAPI serves API routes AND the SPA from
-#     frontend/dist (see the StaticFiles mount at the bottom of backend/api.py).
+# Uses Docker to guarantee Node+Python coexist (Render's native Python runtime
+# doesn't reliably include npm). See Dockerfile for build steps.
 #
 # Caveats:
 #   - Free tier has no persistent disk, so the DB is rebuilt by `ingest.py`
@@ -14,18 +11,7 @@
 services:
   - type: web
     name: aicure-poc
-    runtime: python
+    runtime: docker
     plan: free
     region: oregon
-    buildCommand: |
-      set -e
-      cd frontend
-      npm install
-      npm run build
-      cd ../backend
-      pip install -r requirements.txt
-      python3 ingest.py
-    startCommand: cd backend && uvicorn api:app --host 0.0.0.0 --port $PORT
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
+    dockerfilePath: ./Dockerfile
