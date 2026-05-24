@@ -9,10 +9,6 @@ from ct_puller import pull_all
 from ctis_puller import pull_all_ctis
 from eudract_puller import pull_all_eudract
 from isrctn_puller import pull_all_isrctn
-from ntr_puller import pull_all_ntr
-from anzctr_puller import pull_all_anzctr
-from drks_puller import pull_all_drks
-from jrct_puller import pull_all_jrct
 from cris_puller import pull_all_cris
 from rss_parser import parse_all_feeds
 from linker import run_linker
@@ -24,10 +20,6 @@ STEPS = [
     ("CTIS", pull_all_ctis),
     ("EU-CTR", pull_all_eudract),
     ("ISRCTN", pull_all_isrctn),
-    ("NTR", pull_all_ntr),
-    ("ANZCTR", pull_all_anzctr),
-    ("DRKS", pull_all_drks),
-    ("jRCT", pull_all_jrct),
     ("CRIS", pull_all_cris),
     ("RSS feeds", parse_all_feeds),
     ("Linker", run_linker),

@@ -118,10 +118,6 @@ const REGISTRY_PILL_STYLES = {
   'CTIS':               { background: '#ede9fe', color: '#6d28d9' },
   'EU-CTR':             { background: '#fef3c7', color: '#92400e' },
   'ISRCTN':             { background: '#dcfce7', color: '#166534' },
-  'NTR':                { background: '#ccfbf1', color: '#0f766e' },
-  'ANZCTR':             { background: '#fce7f3', color: '#9d174d' },
-  'DRKS':               { background: '#fff7ed', color: '#9a3412' },
-  'jRCT':               { background: '#f0fdf4', color: '#15803d' },
   'CRIS':               { background: '#fdf4ff', color: '#7e22ce' },
 }
 
@@ -137,34 +133,6 @@ function RegistryIdLink({ value, baseUrl }) {
 
 function IsrctnLink({ value }) {
   return <RegistryIdLink value={value} baseUrl="https://www.isrctn.com/" />
-}
-
-function NtrLink({ value }) {
-  return <RegistryIdLink value={value} baseUrl="https://www.trialregister.nl/trial/" />
-}
-
-function AnzctrLink({ value }) {
-  if (!value) return null
-  return (
-    <a href={`https://www.anzctr.org.au/Trial/Registration/TrialReview.aspx?ACTRN=${value}`}
-      target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-      {value}
-    </a>
-  )
-}
-
-function DrksLink({ value }) {
-  if (!value) return null
-  return (
-    <a href={`https://www.drks.de/drks_web/navigate.do?navigationId=trial.HTML&TRIAL_ID=${value}`}
-      target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-      {value}
-    </a>
-  )
-}
-
-function JrctLink({ value }) {
-  return <RegistryIdLink value={value} baseUrl="https://jrct.niph.go.jp/en-latest-data/" />
 }
 
 function CrisLink({ value }) {
@@ -251,10 +219,6 @@ const COLUMN_DEFS = [
   { ...BASE, field: 'euct_id',             headerName: 'EUCT ID',            width: 160, hide: true },
   { ...BASE, field: 'eudract_number',      headerName: 'EudraCT No.',        width: 140, hide: true },
   { ...BASE, field: 'isrctn_id',           headerName: 'ISRCTN ID',          width: 140, hide: true,  cellRenderer: IsrctnLink },
-  { ...BASE, field: 'ntr_id',              headerName: 'NTR ID',             width: 120, hide: true,  cellRenderer: NtrLink },
-  { ...BASE, field: 'anzctr_id',           headerName: 'ANZCTR ID',          width: 130, hide: true,  cellRenderer: AnzctrLink },
-  { ...BASE, field: 'drks_id',             headerName: 'DRKS ID',            width: 120, hide: true,  cellRenderer: DrksLink },
-  { ...BASE, field: 'jrct_id',             headerName: 'jRCT ID',            width: 120, hide: true,  cellRenderer: JrctLink },
   { ...BASE, field: 'cris_id',             headerName: 'CRIS ID',            width: 120, hide: true,  cellRenderer: CrisLink },
   { ...BASE, field: 'ingested_at',         headerName: 'Ingested',           width: 130, hide: true,  cellRenderer: DateCell },
 ]

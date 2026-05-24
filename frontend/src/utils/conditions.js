@@ -15,7 +15,7 @@ export const FILTER_FIELDS = [
   { key: 'country', label: 'Country', type: 'select', dynamic: 'countries' },
   {
     key: 'registry', label: 'Registry', type: 'select',
-    options: ['ClinicalTrials.gov', 'CTIS', 'EU-CTR', 'ISRCTN', 'NTR', 'ANZCTR', 'DRKS', 'jRCT', 'CRIS'],
+    options: ['ClinicalTrials.gov', 'CTIS', 'EU-CTR', 'ISRCTN', 'CRIS'],
   },
   { key: 'has_news', label: 'Has News', type: 'boolean' },
   { key: 'enrollment', label: 'Enrollment', type: 'number' },

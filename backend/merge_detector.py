@@ -9,10 +9,6 @@ NCT_RE = re.compile(r"^NCT\d{8}$")
 _PREFIX_TO_ID_COL = {
     "EUCT":   "euct_id",
     "ISRCTN": "isrctn_id",
-    "NTR":    "ntr_id",
-    "ANZCTR": "anzctr_id",
-    "DRKS":   "drks_id",
-    "JRCT":   "jrct_id",
     "CRIS":   "cris_id",
 }
 
