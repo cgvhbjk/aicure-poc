@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from fastapi import FastAPI, Query, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from typing import Optional, List
 from pydantic import BaseModel
 
@@ -1059,3 +1060,13 @@ def get_registries_stats():
         "cross_registered_trials": cross_registered,
         "eu_trials_with_nct_xref": eu_with_nct,
     }
+
+
+# Serve the built React SPA from /frontend/dist for single-service deploys
+# (e.g. Render). Mounted last so API routes take precedence. The directory
+# only exists after `npm run build`, so guard against missing dir in dev.
+_FRONTEND_DIST = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist"
+)
+if os.path.isdir(_FRONTEND_DIST):
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")

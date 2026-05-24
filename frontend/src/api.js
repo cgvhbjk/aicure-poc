@@ -1,7 +1,11 @@
 import axios from 'axios'
 
+// In prod the backend serves the SPA from the same origin, so use relative
+// URLs. In dev the backend lives on a different port, so default to it.
+// VITE_API_URL always wins if explicitly set.
+const _defaultBase = import.meta.env.PROD ? '' : 'http://localhost:8000'
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
+  baseURL: import.meta.env.VITE_API_URL ?? _defaultBase,
   paramsSerializer: {
     serialize: (params) => {
       const sp = new URLSearchParams()
