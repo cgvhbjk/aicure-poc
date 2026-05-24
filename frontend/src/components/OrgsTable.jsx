@@ -72,7 +72,7 @@ export default function OrgsTable({ filters, filterOpen, onToggleFilter, onSelec
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await getOrgs({ ...filters, page_size: 100000 })
+      const res = await getOrgs({ ...filters, page_size: 10000 })
       setRowData(res.data.results)
       setTotal(res.data.total)
     } catch (e) {

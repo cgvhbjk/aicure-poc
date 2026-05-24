@@ -152,7 +152,7 @@ export default function NewsTable({ filters, filterOpen, onToggleFilter }) {
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
-      const params = { ...filters, page_size: 100000 }
+      const params = { ...filters, page_size: 10000 }
       if (params.linked_only === null) delete params.linked_only
       const res = await getNews(params)
       setRowData(res.data.results)
