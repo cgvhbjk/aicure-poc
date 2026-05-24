@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from fastapi import FastAPI, Query, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from typing import Optional, List
 from pydantic import BaseModel
@@ -19,6 +20,8 @@ _UPLOADS_DIR = os.path.join(_BACKEND_DIR, "data", "uploads")
 os.makedirs(_UPLOADS_DIR, exist_ok=True)
 
 app = FastAPI(title="AiCure POC API")
+
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
