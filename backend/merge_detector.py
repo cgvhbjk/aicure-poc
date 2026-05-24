@@ -163,6 +163,13 @@ def _auto_merge(conn, a: dict, b: dict, score: float, match_fields: list, match_
     )
 
 
+def _sponsor_block_key(sponsor: str) -> str:
+    if not sponsor:
+        return ""
+    tokens = re.sub(r"[^\w]", " ", sponsor.lower()).split()
+    return tokens[0] if tokens else ""
+
+
 def detect_trial_duplicates() -> int:
     conn = get_connection()
     rows = conn.execute(
@@ -174,17 +181,28 @@ def detect_trial_duplicates() -> int:
     ).fetchall()
     trials = [dict(r) for r in rows]
 
-    # Group by therapeutic_area + phase
-    groups: dict = {}
+    # Two blocking strategies — a pair is considered if it shares either block.
+    # 1. (therapeutic_area, phase) catches NCT↔NCT with a populated area.
+    # 2. (phase, sponsor first-token) catches cross-registry pairs where the
+    #    non-NCT registry didn't populate therapeutic_area but the sponsor name
+    #    overlaps. Without this fallback, no CRIS/EUCT/ISRCTN trial can ever
+    #    match an NCT trial because therapeutic_area is "" on every non-NCT row.
+    blocks: dict = {}
     for t in trials:
-        key = (t.get("therapeutic_area") or "", t.get("phase") or "")
-        groups.setdefault(key, []).append(t)
+        ta = t.get("therapeutic_area") or ""
+        ph = t.get("phase") or ""
+        sb = _sponsor_block_key(t.get("sponsor") or "")
+        if ta and ph:
+            blocks.setdefault(("ta", ta, ph), []).append(t)
+        if sb and ph:
+            blocks.setdefault(("sp", sb, ph), []).append(t)
 
     now = datetime.utcnow().isoformat()
     pending = 0
     auto_merged = 0
+    seen_pairs: set = set()
 
-    for group_trials in groups.values():
+    for group_trials in blocks.values():
         nct = [t for t in group_trials if _is_nct(t["id"])]
         others = [t for t in group_trials if not _is_nct(t["id"])]
         if not nct or not others:
@@ -192,6 +210,11 @@ def detect_trial_duplicates() -> int:
 
         for a in nct:
             for b in others:
+                pair_key = tuple(sorted([a["id"], b["id"]]))
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+
                 if _candidate_exists(conn, a["id"], b["id"], "trials"):
                     continue
 

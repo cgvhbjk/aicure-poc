@@ -242,7 +242,7 @@ export default function TrialsTable({
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await getTrials({ ...filters, page_size: 500 })
+      const res = await getTrials({ ...filters, page_size: 100000 })
       setRowData(res.data.results)
       setTotal(res.data.total)
     } catch (e) {

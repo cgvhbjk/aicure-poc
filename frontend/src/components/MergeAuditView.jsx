@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { getMerges, getMergeStats, confirmMerge, rejectMerge, snoozeMerge } from '../api'
+import { getMerges, getMergeStats, confirmMerge, rejectMerge, snoozeMerge, undoMerge } from '../api'
 
 const ENTITY_TYPES = ['trials', 'organizations']
 const STATUS_OPTIONS = ['PENDING', 'CONFIRMED_MERGE', 'REJECTED', 'SNOOZED']
@@ -52,6 +52,7 @@ function MergeCard({ candidate, onAction, focused }) {
 
   const isTrials = candidate.entity_type === 'trials'
   const isPending = candidate.status === 'PENDING'
+  const canUndo = candidate.status === 'CONFIRMED_MERGE' && !!candidate.loser_snapshot
 
   const FIELD_LABELS = isTrials
     ? [
@@ -66,15 +67,22 @@ function MergeCard({ candidate, onAction, focused }) {
       ]
     : [
         ['canonical_name', 'Name'],
-        ['org_type', 'Type'],
+        ['trial_count', 'Trial count'],
+        ['aliases', 'Aliases'],
         ['therapeutic_focus', 'Focus'],
+        ['org_type', 'Type'],
         ['website', 'Website'],
       ]
 
+  const JSON_ARRAY_FIELDS = new Set(['conditions', 'therapeutic_focus', 'aliases'])
+
   const formatVal = (key, val) => {
-    if (val == null) return null
-    if (key === 'conditions') {
-      try { return JSON.parse(val).join(', ') } catch { return val }
+    if (val == null || val === '') return null
+    if (JSON_ARRAY_FIELDS.has(key)) {
+      try {
+        const arr = JSON.parse(val)
+        return Array.isArray(arr) ? (arr.length ? arr.join(', ') : null) : String(val)
+      } catch { return String(val) }
     }
     return String(val)
   }
@@ -137,7 +145,7 @@ function MergeCard({ candidate, onAction, focused }) {
             className="btn-sm btn-confirm"
             disabled={loading != null}
             onClick={() => act(
-              () => confirmMerge(candidate.id, { keep_id: candidate.record_a_id }),
+              () => confirmMerge(candidate.id, { surviving_id: candidate.record_a_id }),
               'confirm'
             )}
           >
@@ -156,6 +164,18 @@ function MergeCard({ candidate, onAction, focused }) {
             onClick={() => act(() => snoozeMerge(candidate.id), 'snooze')}
           >
             {loading === 'snooze' ? '…' : 'Snooze 30d'}
+          </button>
+        </div>
+      )}
+
+      {canUndo && (
+        <div className="merge-actions">
+          <button
+            className="btn-sm btn-undo"
+            disabled={loading != null}
+            onClick={() => act(() => undoMerge(candidate.id), 'undo')}
+          >
+            {loading === 'undo' ? '…' : '↶ Undo merge'}
           </button>
         </div>
       )}
@@ -211,7 +231,7 @@ export default function MergeAuditView() {
         // Destructive actions require Shift to avoid accidental triggers.
         if (e.key === 'M') {
           e.preventDefault()
-          confirmMerge(c.id, { keep_id: c.record_a_id }).then(load)
+          confirmMerge(c.id, { surviving_id: c.record_a_id }).then(load)
         } else if (e.key === 'R') {
           e.preventDefault()
           rejectMerge(c.id).then(load)
@@ -236,10 +256,10 @@ export default function MergeAuditView() {
               <strong>{stats.pending}</strong> pending
             </span>
             <span className="merge-stat accent-green">
-              <strong>{stats.confirmed}</strong> confirmed
+              <strong>{stats.confirmed_this_week}</strong> confirmed (7d)
             </span>
             <span className="merge-stat accent-red">
-              <strong>{stats.rejected}</strong> rejected
+              <strong>{stats.rejected_this_week}</strong> rejected (7d)
             </span>
             <span className="merge-stat accent-amber">
               <strong>{stats.snoozed}</strong> snoozed

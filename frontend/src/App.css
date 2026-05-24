@@ -1336,6 +1336,7 @@
   border-radius: 10px;
   background: #fff;
   overflow: hidden;
+  flex-shrink: 0;
   transition: box-shadow 0.15s, border-color 0.15s;
 }
 
@@ -1525,5 +1526,15 @@
 
 .btn-snooze:hover:not(:disabled) {
   background: #fef3c7 !important;
+}
+
+.btn-undo {
+  background: #eff6ff !important;
+  color: #2563eb !important;
+  border-color: #bfdbfe !important;
+}
+
+.btn-undo:hover:not(:disabled) {
+  background: #dbeafe !important;
 }
 
