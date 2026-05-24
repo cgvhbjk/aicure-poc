@@ -222,6 +222,7 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
         {/* Views sidebar — only for Trials tab */}
         {activeTab === 'trials' && (
           <ViewsSidebar
+            tab="trials"
             gridApiRef={trialApiRef}
             getCurrentConditions={getCurrentConditions}
             onApplyConditions={setConditions}

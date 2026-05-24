@@ -40,6 +40,8 @@ def get_trials(
     therapeutic_area: Optional[List[str]] = Query(default=None),
     country: Optional[List[str]] = Query(default=None),
     has_news: Optional[bool] = None,
+    has_euct_id: Optional[bool] = None,
+    has_eudract: Optional[bool] = None,
     registry: Optional[List[str]] = Query(default=None),
     min_enrollment: Optional[int] = None,
     max_enrollment: Optional[int] = None,
@@ -90,6 +92,18 @@ def get_trials(
     if has_news is not None:
         where_clauses.append("has_news = ?")
         params.append(1 if has_news else 0)
+
+    if has_euct_id is not None:
+        where_clauses.append(
+            "euct_id IS NOT NULL AND euct_id != ''" if has_euct_id
+            else "(euct_id IS NULL OR euct_id = '')"
+        )
+
+    if has_eudract is not None:
+        where_clauses.append(
+            "eudract_number IS NOT NULL AND eudract_number != ''" if has_eudract
+            else "(eudract_number IS NULL OR eudract_number = '')"
+        )
 
     if registry:
         reg_clauses = " OR ".join(["registry_sources LIKE ?"] * len(registry))
@@ -770,6 +784,7 @@ def get_stats():
     trials_with_news = conn.execute("SELECT COUNT(*) FROM trials WHERE has_news = 1").fetchone()[0]
     total_news = conn.execute("SELECT COUNT(*) FROM news_items").fetchone()[0]
     unlinked_news = conn.execute("SELECT COUNT(*) FROM news_items WHERE trial_id IS NULL").fetchone()[0]
+    total_orgs = conn.execute("SELECT COUNT(*) FROM organizations").fetchone()[0]
 
     by_status = {
         r["status"] or "Unknown": r["n"]
@@ -815,6 +830,7 @@ def get_stats():
         "trials_with_news": trials_with_news,
         "total_news": total_news,
         "unlinked_news": unlinked_news,
+        "total_orgs": total_orgs,
         "eu_ctis_count": eu_ctis_count,
         "eu_ctr_count": eu_ctr_count,
         "by_status": by_status,
@@ -823,4 +839,45 @@ def get_stats():
         "by_registry": by_registry,
         "by_country": by_country,
         "last_ingested": last_ingested,
+    }
+
+
+@app.get("/registries/stats")
+def get_registries_stats():
+    """Per-registry counts plus cross-registration breakdown."""
+    conn = get_connection()
+
+    per_registry = {
+        r["registry"]: r["n"]
+        for r in conn.execute(
+            "SELECT registry, COUNT(*) AS n FROM registry_source_records "
+            "GROUP BY registry ORDER BY n DESC"
+        ).fetchall()
+    }
+
+    # A trial is "cross-registered" if it has > 1 entry in registry_source_records.
+    cross_registered = conn.execute(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT trial_id FROM registry_source_records
+            GROUP BY trial_id HAVING COUNT(*) > 1
+        )
+        """
+    ).fetchone()[0]
+
+    # Trials with an NCT cross-reference recorded in an EU registry row.
+    eu_with_nct = conn.execute(
+        """
+        SELECT COUNT(*) FROM trials
+        WHERE (euct_id IS NOT NULL OR eudract_number IS NOT NULL)
+          AND id LIKE 'NCT%'
+        """
+    ).fetchone()[0]
+
+    conn.close()
+
+    return {
+        "per_registry": per_registry,
+        "cross_registered_trials": cross_registered,
+        "eu_trials_with_nct_xref": eu_with_nct,
     }

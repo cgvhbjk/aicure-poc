@@ -1,0 +1,15 @@
+# AiCure ingestion cron — biweekly, Sunday overnight (00:30 every other Sunday).
+#
+# Install on a host with `crontab -e`, or copy into /etc/cron.d/aicure.
+# Logs land in backend/data/logs/ingest.log.
+#
+# Adjust the path on the left of "&&" to wherever the repo lives on the host.
+#
+# Field positions: minute hour day-of-month month day-of-week
+# This runs at 00:30 on Sunday when the ISO week number is even,
+# i.e. once every two weeks. (`%V` is the ISO week, padded with `10#` to
+# avoid octal interpretation of leading zeros.)
+30 0 * * 0 [ $((10#$(date +\%V) \% 2)) -eq 0 ] && cd /path/to/aicure-poc/backend && /usr/bin/env python3 ingest.py >> data/logs/ingest.log 2>&1
+
+# News-only refresh — every day at 06:00 (cheap, no registry pulls).
+0 6 * * * cd /path/to/aicure-poc/backend && /usr/bin/env python3 reingest_news.py >> data/logs/news.log 2>&1

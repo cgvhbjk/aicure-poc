@@ -6,45 +6,99 @@ const VIEW_COLORS = [
   '#dc2626', '#7c3aed', '#0d9488', '#db2777',
 ]
 
-const LS_NEW = 'aicure_saved_views_v2'
-const LS_OLD = 'aicure_saved_views'
-const LS_ACTIVE = 'aicure_active_view_id'
-const LS_SESSION = 'aicure_session_state'  // last-applied state for default Grid
+// View state is scoped per tab so Trials and News (or any future tab with
+// views) can each remember their own column layout, filters, and conditions.
+// Legacy keys without a tab suffix are migrated into the 'trials' namespace
+// the first time we load on that tab.
+const LS_KEYS = (tab) => ({
+  views:   `aicure_saved_views_v2:${tab}`,
+  active:  `aicure_active_view_id:${tab}`,
+  session: `aicure_session_state:${tab}`,
+})
+const LS_LEGACY_VIEWS_V2 = 'aicure_saved_views_v2'
+const LS_LEGACY_VIEWS_V1 = 'aicure_saved_views'
+const LS_LEGACY_ACTIVE   = 'aicure_active_view_id'
+const LS_LEGACY_SESSION  = 'aicure_session_state'
 
-function loadViews() {
-  const oldRaw = localStorage.getItem(LS_OLD)
-  if (oldRaw) {
-    try {
-      const old = JSON.parse(oldRaw)
-      const migrated = old.map((v, i) => ({
-        id: uuidv4(),
-        name: v.name,
-        color: VIEW_COLORS[i % VIEW_COLORS.length],
-        columnState: v.columnState || [],
-        filterModel: v.filterModel || {},
-        conditions: v.conditions || [],
-        createdAt: new Date().toISOString(),
-      }))
-      localStorage.setItem(LS_NEW, JSON.stringify(migrated))
-      localStorage.removeItem(LS_OLD)
-      return migrated
-    } catch {}
+function loadViews(tab) {
+  const keys = LS_KEYS(tab)
+  // Tab-scoped store already populated?
+  const scoped = localStorage.getItem(keys.views)
+  if (scoped) {
+    try { return JSON.parse(scoped) } catch {}
   }
-  try { return JSON.parse(localStorage.getItem(LS_NEW) || '[]') } catch { return [] }
+  // One-time migration of the un-namespaced legacy key into the trials tab.
+  if (tab === 'trials') {
+    const legacyV2 = localStorage.getItem(LS_LEGACY_VIEWS_V2)
+    if (legacyV2) {
+      try {
+        const parsed = JSON.parse(legacyV2)
+        localStorage.setItem(keys.views, legacyV2)
+        localStorage.removeItem(LS_LEGACY_VIEWS_V2)
+        return parsed
+      } catch {}
+    }
+    const legacyV1 = localStorage.getItem(LS_LEGACY_VIEWS_V1)
+    if (legacyV1) {
+      try {
+        const old = JSON.parse(legacyV1)
+        const migrated = old.map((v, i) => ({
+          id: uuidv4(),
+          name: v.name,
+          color: VIEW_COLORS[i % VIEW_COLORS.length],
+          columnState: v.columnState || [],
+          filterModel: v.filterModel || {},
+          conditions: v.conditions || [],
+          createdAt: new Date().toISOString(),
+        }))
+        localStorage.setItem(keys.views, JSON.stringify(migrated))
+        localStorage.removeItem(LS_LEGACY_VIEWS_V1)
+        return migrated
+      } catch {}
+    }
+  }
+  return []
 }
 
-function loadActiveId() {
-  return localStorage.getItem(LS_ACTIVE) || 'default'
+function loadActiveId(tab) {
+  const keys = LS_KEYS(tab)
+  const scoped = localStorage.getItem(keys.active)
+  if (scoped) return scoped
+  if (tab === 'trials') {
+    const legacy = localStorage.getItem(LS_LEGACY_ACTIVE)
+    if (legacy) {
+      localStorage.setItem(keys.active, legacy)
+      localStorage.removeItem(LS_LEGACY_ACTIVE)
+      return legacy
+    }
+  }
+  return 'default'
 }
 
-function loadSession() {
-  try { return JSON.parse(localStorage.getItem(LS_SESSION) || 'null') } catch { return null }
+function loadSession(tab) {
+  const keys = LS_KEYS(tab)
+  const scoped = localStorage.getItem(keys.session)
+  if (scoped) {
+    try { return JSON.parse(scoped) } catch { return null }
+  }
+  if (tab === 'trials') {
+    const legacy = localStorage.getItem(LS_LEGACY_SESSION)
+    if (legacy) {
+      localStorage.setItem(keys.session, legacy)
+      localStorage.removeItem(LS_LEGACY_SESSION)
+      try { return JSON.parse(legacy) } catch { return null }
+    }
+  }
+  return null
 }
 
 export default function ViewsSidebar({
   gridApiRef, getCurrentConditions, onApplyConditions,
-  conditions, gridStateBump,
+  conditions, gridStateBump, tab = 'trials',
 }) {
+  const LS_NEW = LS_KEYS(tab).views
+  const LS_ACTIVE = LS_KEYS(tab).active
+  const LS_SESSION = LS_KEYS(tab).session
   const [views, setViews] = useState([])
   const [activeId, setActiveIdState] = useState('default')
   const [creatingNew, setCreatingNew] = useState(false)
@@ -66,11 +120,13 @@ export default function ViewsSidebar({
     try { localStorage.setItem(LS_ACTIVE, id) } catch {}
   }
 
-  // Initial load + state restoration.
+  // Initial load + state restoration. Re-runs if the tab changes so each tab
+  // has its own view list, active id, and session state.
   useEffect(() => {
-    const v = loadViews()
+    mountedRef.current = false
+    const v = loadViews(tab)
     setViews(v)
-    const aid = loadActiveId()
+    const aid = loadActiveId(tab)
     setActiveIdState(aid)
 
     // Defer restoration to next tick so the grid API is ready.
@@ -83,7 +139,7 @@ export default function ViewsSidebar({
         setTimeout(() => { restoringRef.current = false; mountedRef.current = true }, 60)
       } else {
         // Default Grid — restore session state if present
-        const sess = loadSession()
+        const sess = loadSession(tab)
         if (sess) {
           restoringRef.current = true
           applyStateToGrid(sess)
@@ -95,7 +151,7 @@ export default function ViewsSidebar({
       }
     }, 50)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [tab])
 
   useEffect(() => {
     const close = (e) => { if (!e.target.closest?.('.view-menu-wrap')) setMenuId(null) }
@@ -221,7 +277,7 @@ export default function ViewsSidebar({
   }
 
   const sessionHasState = () => {
-    const s = loadSession()
+    const s = loadSession(tab)
     if (!s) return false
     return (s.conditions?.length > 0) || Object.keys(s.filterModel || {}).length > 0 || (s.columnState?.length > 0)
   }
