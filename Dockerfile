@@ -16,15 +16,11 @@ WORKDIR /app
 COPY backend/requirements.txt ./backend/
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
-# Backend source
+# Backend source (includes backend/data/aicure.db shipped via Git LFS)
 COPY backend ./backend
 
 # Built frontend
 COPY --from=frontend /app/frontend/dist ./frontend/dist
-
-# Seed the DB during build so the running container starts ready-to-serve.
-# Render's free tier has no persistent disk; rebuilt on every deploy.
-RUN cd backend && python3 ingest.py
 
 ENV PORT=10000
 EXPOSE 10000

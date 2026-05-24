@@ -6,13 +6,12 @@ __pycache__/
 venv/
 *.egg
 
-# Generated artifacts. The SQLite DB and its journal/WAL are no longer
-# committed — they crossed GitHub's 100 MB file-size limit. Seed deploys by
-# running `python3 ingest.py` on the host or by syncing a snapshot from S3.
+# Generated artifacts. The main aicure.db lives in Git LFS (see .gitattributes)
+# so deploys don't have to re-run ingest. The transient journal/WAL/SHM files
+# and the snapshot/upload caches stay ignored.
 backend/data/snapshots/
 backend/data/uploads/
 backend/data/clinical_trials.db
-backend/data/aicure.db
 backend/data/aicure.db-journal
 backend/data/aicure.db-wal
 backend/data/aicure.db-shm
