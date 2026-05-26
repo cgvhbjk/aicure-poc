@@ -14,5 +14,4 @@ jobs:
         run: |
           curl -sf --retry 3 --retry-delay 30 \
             -X POST \
-            -H "X-Admin-Key: ${{ secrets.ADMIN_KEY }}" \
-            "${{ secrets.RENDER_URL }}/admin/refresh-news"
+            https://aicure-poc.onrender.com/admin/refresh-news
