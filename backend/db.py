@@ -198,6 +198,50 @@ def _init_db():
             ON merge_candidates(status);
         CREATE INDEX IF NOT EXISTS idx_merge_candidates_entity
             ON merge_candidates(entity_type, status);
+
+        CREATE TABLE IF NOT EXISTS grants (
+            id                    TEXT PRIMARY KEY,
+            source                TEXT,
+            award_id              TEXT,
+            title                 TEXT,
+            abstract              TEXT,
+            pi_name               TEXT,
+            pi_email              TEXT,
+            organization          TEXT,
+            org_type              TEXT,
+            sponsor_funder        TEXT,
+            amount_usd            INTEGER,
+            currency              TEXT,
+            amount_original       REAL,
+            start_date            TEXT,
+            end_date              TEXT,
+            award_date            TEXT,
+            status                TEXT,
+            therapeutic_area      TEXT,
+            conditions            TEXT,
+            interventions         TEXT,
+            phase_mentioned       TEXT,
+            linked_trial_id       TEXT REFERENCES trials(id),
+            country               TEXT,
+            source_url            TEXT,
+            raw_snapshot_path     TEXT,
+            ingested_at           TEXT,
+            has_trial_link        INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS grant_trial_links (
+            grant_id              TEXT REFERENCES grants(id),
+            trial_id              TEXT REFERENCES trials(id),
+            match_method          TEXT,
+            PRIMARY KEY (grant_id, trial_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_grants_source
+            ON grants(source);
+        CREATE INDEX IF NOT EXISTS idx_grants_therapeutic_area
+            ON grants(therapeutic_area);
+        CREATE INDEX IF NOT EXISTS idx_grants_has_trial_link
+            ON grants(has_trial_link);
     """)
     conn.commit()
     for alter in [
@@ -213,6 +257,11 @@ def _init_db():
         "ALTER TABLE trials ADD COLUMN drks_id TEXT",
         "ALTER TABLE trials ADD COLUMN jrct_id TEXT",
         "ALTER TABLE trials ADD COLUMN cris_id TEXT",
+        "ALTER TABLE trials ADD COLUMN chictr_id TEXT",
+        "ALTER TABLE trials ADD COLUMN ctri_id TEXT",
+        "ALTER TABLE trials ADD COLUMN irct_id TEXT",
+        "ALTER TABLE trials ADD COLUMN rebec_id TEXT",
+        "ALTER TABLE trials ADD COLUMN pactr_id TEXT",
         "ALTER TABLE merge_candidates ADD COLUMN loser_snapshot TEXT",
     ]:
         try:

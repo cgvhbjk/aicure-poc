@@ -24,8 +24,9 @@ NCT_PATTERN = re.compile(r'\bNCT\d{8}\b')
 
 # Allowlist of registry-id columns that may be interpolated into UPDATE/INSERT.
 _ALLOWED_ID_COLUMNS = {
-    "isrctn_id", "cris_id", "eudract_id", "euct_id",
-    "eudract_number",
+    "isrctn_id", "cris_id", "eudract_id", "euct_id", "eudract_number",
+    "anzctr_id", "drks_id", "jrct_id", "ntr_id",
+    "chictr_id", "ctri_id", "irct_id", "rebec_id", "pactr_id",
 }
 
 _PREFIX_MAP = {

@@ -4,12 +4,12 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ctis_puller import pull_all_ctis
-from eudract_puller import pull_all_eudract
+from ictrp_puller import pull_all_ictrp
 from isrctn_puller import pull_all_isrctn
 
 steps = [
     ("CTIS", pull_all_ctis),
-    ("EU-CTR", pull_all_eudract),
+    ("ICTRP", pull_all_ictrp),
     ("ISRCTN", pull_all_isrctn),
 ]
 

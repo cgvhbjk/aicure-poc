@@ -45,7 +45,6 @@ def get_trials(
     country: Optional[List[str]] = Query(default=None),
     has_news: Optional[bool] = None,
     has_euct_id: Optional[bool] = None,
-    has_eudract: Optional[bool] = None,
     registry: Optional[List[str]] = Query(default=None),
     min_enrollment: Optional[int] = None,
     max_enrollment: Optional[int] = None,
@@ -101,12 +100,6 @@ def get_trials(
         where_clauses.append(
             "euct_id IS NOT NULL AND euct_id != ''" if has_euct_id
             else "(euct_id IS NULL OR euct_id = '')"
-        )
-
-    if has_eudract is not None:
-        where_clauses.append(
-            "eudract_number IS NOT NULL AND eudract_number != ''" if has_eudract
-            else "(eudract_number IS NULL OR eudract_number = '')"
         )
 
     if registry:
@@ -1063,6 +1056,148 @@ def get_registries_stats():
         "cross_registered_trials": cross_registered,
         "eu_trials_with_nct_xref": eu_with_nct,
     }
+
+
+@app.get("/grants/stats")
+def get_grants_stats():
+    conn = get_connection()
+    total_grants = conn.execute("SELECT COUNT(*) FROM grants").fetchone()[0]
+    active_grants = conn.execute("SELECT COUNT(*) FROM grants WHERE status = 'ACTIVE'").fetchone()[0]
+    grants_with_links = conn.execute("SELECT COUNT(*) FROM grants WHERE has_trial_link = 1").fetchone()[0]
+    total_funding = conn.execute(
+        "SELECT SUM(amount_usd) FROM grants WHERE amount_usd IS NOT NULL"
+    ).fetchone()[0] or 0
+    active_funding = conn.execute(
+        "SELECT SUM(amount_usd) FROM grants WHERE status = 'ACTIVE' AND amount_usd IS NOT NULL"
+    ).fetchone()[0] or 0
+    by_source = {
+        r["source"]: r["n"]
+        for r in conn.execute("SELECT source, COUNT(*) AS n FROM grants GROUP BY source").fetchall()
+    }
+    by_area = {
+        r["therapeutic_area"] or "Other": r["n"]
+        for r in conn.execute(
+            "SELECT therapeutic_area, COUNT(*) AS n FROM grants GROUP BY therapeutic_area"
+        ).fetchall()
+    }
+    by_country = {
+        r["country"]: r["n"]
+        for r in conn.execute(
+            "SELECT country, COUNT(*) AS n FROM grants "
+            "WHERE country IS NOT NULL AND country != '' "
+            "GROUP BY country ORDER BY n DESC LIMIT 30"
+        ).fetchall()
+    }
+    conn.close()
+    return {
+        "total_grants": total_grants,
+        "active_grants": active_grants,
+        "grants_with_trial_links": grants_with_links,
+        "total_funding_usd": total_funding,
+        "active_funding_usd": active_funding,
+        "by_source": by_source,
+        "by_therapeutic_area": by_area,
+        "by_country": by_country,
+    }
+
+
+@app.get("/grants")
+def get_grants(
+    q: Optional[str] = None,
+    source: Optional[List[str]] = Query(default=None),
+    therapeutic_area: Optional[List[str]] = Query(default=None),
+    status: Optional[List[str]] = Query(default=None),
+    country: Optional[List[str]] = Query(default=None),
+    has_trial_link: Optional[bool] = None,
+    min_amount: Optional[int] = None,
+    max_amount: Optional[int] = None,
+    page: int = 1,
+    page_size: int = 100,
+):
+    page_size = min(page_size, 100000)
+    conn = get_connection()
+
+    where_clauses = []
+    params = []
+
+    if q:
+        where_clauses.append(
+            "(LOWER(title) LIKE ? OR LOWER(abstract) LIKE ? "
+            "OR LOWER(organization) LIKE ? OR LOWER(pi_name) LIKE ?)"
+        )
+        q_like = f"%{q.lower()}%"
+        params.extend([q_like, q_like, q_like, q_like])
+
+    if source:
+        placeholders = ",".join("?" * len(source))
+        where_clauses.append(f"source IN ({placeholders})")
+        params.extend(source)
+
+    if therapeutic_area:
+        placeholders = ",".join("?" * len(therapeutic_area))
+        where_clauses.append(f"therapeutic_area IN ({placeholders})")
+        params.extend(therapeutic_area)
+
+    if status:
+        placeholders = ",".join("?" * len(status))
+        where_clauses.append(f"status IN ({placeholders})")
+        params.extend(status)
+
+    if country:
+        placeholders = ",".join("?" * len(country))
+        where_clauses.append(f"country IN ({placeholders})")
+        params.extend(country)
+
+    if has_trial_link is not None:
+        where_clauses.append("has_trial_link = ?")
+        params.append(1 if has_trial_link else 0)
+
+    if min_amount is not None:
+        where_clauses.append("amount_usd >= ?")
+        params.append(min_amount)
+
+    if max_amount is not None:
+        where_clauses.append("amount_usd <= ?")
+        params.append(max_amount)
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    total = conn.execute(f"SELECT COUNT(*) FROM grants {where_sql}", params).fetchone()[0]
+    offset = (page - 1) * page_size
+    rows = conn.execute(
+        f"SELECT * FROM grants {where_sql} ORDER BY amount_usd DESC NULLS LAST, ingested_at DESC LIMIT ? OFFSET ?",
+        params + [page_size, offset],
+    ).fetchall()
+
+    conn.close()
+    return {"total": total, "page": page, "results": [row_to_dict(r) for r in rows]}
+
+
+@app.get("/grants/{grant_id}/trials")
+def get_grant_trials(grant_id: str):
+    conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT t.*, gtl.match_method
+        FROM trials t
+        JOIN grant_trial_links gtl ON t.id = gtl.trial_id
+        WHERE gtl.grant_id = ?
+        ORDER BY gtl.match_method
+        """,
+        (grant_id,),
+    ).fetchall()
+    conn.close()
+    return [row_to_dict(r) for r in rows]
+
+
+@app.get("/grants/{grant_id}")
+def get_grant(grant_id: str):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM grants WHERE id = ?", (grant_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Grant not found")
+    return row_to_dict(row)
 
 
 # Serve the built React SPA from /frontend/dist for single-service deploys

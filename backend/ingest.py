@@ -7,24 +7,40 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ct_puller import pull_all
 from ctis_puller import pull_all_ctis
-from eudract_puller import pull_all_eudract
+from ictrp_puller import pull_all_ictrp
 from isrctn_puller import pull_all_isrctn
 from cris_puller import pull_all_cris
 from rss_parser import parse_all_feeds
 from linker import run_linker
 from org_extractor import extract_all_orgs
 from merge_detector import run_merge_detection
+from grants.nih_reporter import pull_nih_reporter
+from grants.usaspending import pull_usaspending
+from grants.cordis import pull_cordis
+from grants.ukri import pull_ukri
+from grants.pcori import pull_pcori
+from grants.aha import pull_aha
+from grants.ada import pull_ada
+from grant_linker import run_grant_linker
 
 STEPS = [
     ("ClinicalTrials.gov", pull_all),
     ("CTIS", pull_all_ctis),
-    ("EU-CTR", pull_all_eudract),
+    ("ICTRP (ANZCTR, DRKS, jRCT, NTR + others)", pull_all_ictrp),
     ("ISRCTN", pull_all_isrctn),
     ("CRIS", pull_all_cris),
     ("RSS feeds", parse_all_feeds),
     ("Linker", run_linker),
     ("Organizations", extract_all_orgs),
     ("Merge detection", run_merge_detection),
+    ("NIH RePORTER", pull_nih_reporter),
+    ("USASpending", pull_usaspending),
+    ("CORDIS", pull_cordis),
+    ("UKRI", pull_ukri),
+    ("PCORI", pull_pcori),
+    ("AHA", pull_aha),
+    ("ADA", pull_ada),
+    ("Grant linker", run_grant_linker),
 ]
 
 

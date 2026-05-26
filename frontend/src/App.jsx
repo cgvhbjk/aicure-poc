@@ -6,8 +6,10 @@ import ViewsSidebar from './components/ViewsSidebar'
 import DetailPanel from './components/DetailPanel'
 import UploadModal from './components/UploadModal'
 import MergeAuditView from './components/MergeAuditView'
+import FundingTable from './components/FundingTable'
+import GrantDetailPanel from './components/GrantDetailPanel'
 import { compileConditions } from './utils/conditions'
-import { getStats, getMergeStats } from './api'
+import { getStats, getMergeStats, getGrantStats } from './api'
 import './App.css'
 
 function useDebounce(value, delay) {
@@ -74,6 +76,11 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [pendingMergeCount, setPendingMergeCount] = useState(null)
 
+  // Grant stats
+  const [grantStats, setGrantStats] = useState(null)
+  // Grant detail panel opened from FundingTable
+  const [selectedGrant, setSelectedGrant] = useState(null)
+
   const trialApiRef = useRef(null)
   // Bumped whenever AG Grid column/sort/filter state mutates, so ViewsSidebar
   // can react to changes that don't live in React state.
@@ -91,6 +98,7 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
   useEffect(() => {
     getStats().then((r) => setStats(r.data)).catch(console.error)
     getMergeStats().then((r) => setPendingMergeCount(r.data.pending)).catch(() => {})
+    getGrantStats().then((r) => setGrantStats(r.data)).catch(() => {})
   }, [])
 
   const therapeuticAreas = stats ? Object.keys(stats.by_therapeutic_area || {}).sort() : []
@@ -141,6 +149,7 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
   const showFilterSidebar = filterOpen
     && activeTab !== 'trials'
     && activeTab !== 'merges'
+    && activeTab !== 'funding'
 
   return (
     <div className="app">
@@ -161,6 +170,17 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
               <span className="stat-pill muted">
                 Ingested {stats.last_ingested.slice(0, 10)}
               </span>
+            )}
+            {grantStats && grantStats.total_grants > 0 && (
+              <>
+                <span className="stat-pill">{grantStats.total_grants.toLocaleString()} grants</span>
+                <span className="stat-pill accent">{grantStats.active_grants} active</span>
+                {grantStats.active_funding_usd > 0 && (
+                  <span className="stat-pill" style={{ color: '#16a34a' }}>
+                    ${(grantStats.active_funding_usd / 1_000_000).toFixed(1)}M funded
+                  </span>
+                )}
+              </>
             )}
           </div>
         ) : (
@@ -194,6 +214,12 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
           onClick={() => setActiveTab('organizations')}
         >
           Organizations
+        </button>
+        <button
+          className={`tab-btn${activeTab === 'funding' ? ' active' : ''}`}
+          onClick={() => setActiveTab('funding')}
+        >
+          Funding
         </button>
         <button
           className={`tab-btn${activeTab === 'merges' ? ' active' : ''}`}
@@ -347,6 +373,9 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
                 onToggleFilter={toggleFilter}
                 onSelectTrial={setOrgSelectedTrial}
               />
+            )}
+            {activeTab === 'funding' && (
+              <FundingTable onSelectTrial={setOrgSelectedTrial} />
             )}
             {activeTab === 'merges' && (
               <MergeAuditView />

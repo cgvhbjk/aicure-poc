@@ -35,6 +35,11 @@ export const getOrgContacts = (orgId) => api.get(`/orgs/${orgId}/contacts`)
 export const addOrgContact = (orgId, body) => api.post(`/orgs/${orgId}/contacts`, body)
 export const patchOrg = (orgId, body) => api.patch(`/orgs/${orgId}`, body)
 
+export const getGrants = (params) => api.get('/grants', { params })
+export const getGrant = (grantId) => api.get(`/grants/${grantId}`)
+export const getGrantTrials = (grantId) => api.get(`/grants/${grantId}/trials`)
+export const getGrantStats = () => api.get('/grants/stats')
+
 export const uploadData = (formData) => api.post('/upload', formData, {
   headers: { 'Content-Type': 'multipart/form-data' },
 })

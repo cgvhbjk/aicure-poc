@@ -145,6 +145,24 @@ function CrisLink({ value }) {
   )
 }
 
+function AnzctrLink({ value }) {
+  return <RegistryIdLink value={value} baseUrl="https://www.anzctr.org.au/Trial/Registration/TrialReview.aspx?id=" />
+}
+
+function DrksLink({ value }) {
+  if (!value) return null
+  return (
+    <a href={`https://www.drks.de/drks_web/navigate.do?navigationId=trial.HTML&TRIAL_ID=${value}`}
+      target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+      {value}
+    </a>
+  )
+}
+
+function JrctLink({ value }) {
+  return <RegistryIdLink value={value} baseUrl="https://jrct.niph.go.jp/en-detail/" />
+}
+
 function RegistryPillsCell({ value }) {
   if (!value) return null
   try {
@@ -220,6 +238,15 @@ const COLUMN_DEFS = [
   { ...BASE, field: 'eudract_number',      headerName: 'EudraCT No.',        width: 140, hide: true },
   { ...BASE, field: 'isrctn_id',           headerName: 'ISRCTN ID',          width: 140, hide: true,  cellRenderer: IsrctnLink },
   { ...BASE, field: 'cris_id',             headerName: 'CRIS ID',            width: 120, hide: true,  cellRenderer: CrisLink },
+  { ...BASE, field: 'anzctr_id',           headerName: 'ANZCTR',             width: 150, hide: true,  cellRenderer: AnzctrLink },
+  { ...BASE, field: 'drks_id',             headerName: 'DRKS',               width: 150, hide: true,  cellRenderer: DrksLink },
+  { ...BASE, field: 'jrct_id',             headerName: 'jRCT',               width: 150, hide: true,  cellRenderer: JrctLink },
+  { ...BASE, field: 'ntr_id',              headerName: 'NTR',                width: 130, hide: true },
+  { ...BASE, field: 'chictr_id',           headerName: 'ChiCTR',             width: 150, hide: true },
+  { ...BASE, field: 'ctri_id',             headerName: 'CTRI',               width: 150, hide: true },
+  { ...BASE, field: 'irct_id',             headerName: 'IRCT',               width: 150, hide: true },
+  { ...BASE, field: 'rebec_id',            headerName: 'ReBec',              width: 130, hide: true },
+  { ...BASE, field: 'pactr_id',            headerName: 'PACTR',              width: 130, hide: true },
   { ...BASE, field: 'ingested_at',         headerName: 'Ingested',           width: 130, hide: true,  cellRenderer: DateCell },
 ]
 
