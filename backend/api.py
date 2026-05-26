@@ -4,14 +4,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import re
+import threading
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, Query, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Query, HTTPException, Header, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from typing import Optional, List
 from pydantic import BaseModel
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from db import get_connection
 
@@ -19,7 +22,68 @@ _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 _UPLOADS_DIR = os.path.join(_BACKEND_DIR, "data", "uploads")
 os.makedirs(_UPLOADS_DIR, exist_ok=True)
 
-app = FastAPI(title="AiCure POC API")
+_ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
+_news_refresh_lock = threading.Lock()
+
+
+def cleanup_old_news():
+    """Delete non-announcement news older than 7 days and repair has_news flags."""
+    conn = get_connection()
+    cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    conn.execute(
+        "DELETE FROM trial_news_links WHERE news_id IN ("
+        "  SELECT id FROM news_items WHERE is_trial_announcement = 0 AND published_at < ?"
+        ")",
+        (cutoff,),
+    )
+    deleted = conn.execute(
+        "DELETE FROM news_items WHERE is_trial_announcement = 0 AND published_at < ?",
+        (cutoff,),
+    ).rowcount
+    # Clear has_news on trials that no longer have any linked news
+    conn.execute(
+        "UPDATE trials SET has_news = 0 WHERE has_news = 1 AND id NOT IN ("
+        "  SELECT DISTINCT trial_id FROM trial_news_links WHERE trial_id IS NOT NULL"
+        ")"
+    )
+    conn.commit()
+    conn.close()
+    print(f"[cleanup] Removed {deleted} old non-announcement news items")
+    return deleted
+
+
+def run_daily_news():
+    """Refresh RSS feeds, re-link to trials, then clean up stale items."""
+    if not _news_refresh_lock.acquire(blocking=False):
+        print("[daily-news] Already running, skipping")
+        return
+    try:
+        from rss_parser import parse_all_feeds
+        from linker import run_linker
+        print(f"[daily-news] Starting at {datetime.utcnow().isoformat()}")
+        parse_all_feeds()
+        run_linker()
+        cleanup_old_news()
+        print(f"[daily-news] Done at {datetime.utcnow().isoformat()}")
+    except Exception as e:
+        print(f"[daily-news] ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        _news_refresh_lock.release()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler = BackgroundScheduler(timezone="UTC")
+    scheduler.add_job(run_daily_news, "cron", hour=6, minute=0, id="daily_news")
+    scheduler.start()
+    print("[scheduler] Daily news job scheduled at 06:00 UTC")
+    yield
+    scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="AiCure POC API", lifespan=lifespan)
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
@@ -1063,6 +1127,19 @@ def get_registries_stats():
         "cross_registered_trials": cross_registered,
         "eu_trials_with_nct_xref": eu_with_nct,
     }
+
+
+@app.post("/admin/refresh-news")
+def admin_refresh_news(x_admin_key: str = Header(default="")):
+    """Manually trigger a news refresh + cleanup. Protected by X-Admin-Key header."""
+    if _ADMIN_KEY and x_admin_key != _ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if not _news_refresh_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Refresh already in progress")
+    _news_refresh_lock.release()
+    thread = threading.Thread(target=run_daily_news, daemon=True)
+    thread.start()
+    return {"status": "started", "message": "News refresh running in background"}
 
 
 # Serve the built React SPA from /frontend/dist for single-service deploys
