@@ -5,3 +5,5 @@ feedparser
 python-dateutil
 openpyxl
 python-multipart
+playwright
+beautifulsoup4

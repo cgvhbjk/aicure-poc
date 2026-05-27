@@ -1,145 +1,175 @@
-import re
+import os
 import time
-from html.parser import HTMLParser
+from datetime import datetime
 from urllib.parse import urljoin
 
-import requests
+try:
+    from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
+    _HAS_PLAYWRIGHT = True
+except ImportError:
+    _HAS_PLAYWRIGHT = False
 
-from grant_utils import is_medical, classify_area, upsert_grant
+from grant_utils import (
+    classify_area, upsert_grant,
+    extract_phase, extract_conditions, extract_interventions,
+)
 from registry_utils import extract_nct
 
 BASE_URL = "https://www.pcori.org"
+PORTFOLIO_URL = f"{BASE_URL}/explore-our-portfolio"
 SEARCH_TERMS = ["obesity", "diabetes", "heart failure", "adherence", "weight loss"]
 
-
-class _CardParser(HTMLParser):
-    """Extract project card links from PCORI listing page."""
-
-    def __init__(self):
-        super().__init__()
-        self._in_card = False
-        self._depth = 0
-        self.links = []
-        self._current_title = None
-        self._capture = False
-
-    def handle_starttag(self, tag, attrs):
-        attrs_dict = dict(attrs)
-        classes = attrs_dict.get("class", "")
-        if "views-row" in classes or "funded-project" in classes:
-            self._in_card = True
-            self._depth = 0
-        if self._in_card and tag == "a" and attrs_dict.get("href"):
-            href = attrs_dict["href"]
-            if "/research-results/" in href or "/research/" in href:
-                self.links.append(urljoin(BASE_URL, href))
-        if tag in ("h2", "h3") and self._in_card:
-            self._capture = True
-
-    def handle_data(self, data):
-        if self._capture:
-            self._current_title = data.strip()
-            self._capture = False
+SNAPSHOT_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "data", "grants"
+)
 
 
-class _DetailParser(HTMLParser):
-    """Extract abstract text from a PCORI project detail page."""
+def _parse_cards(html: str) -> list:
+    from bs4 import BeautifulSoup
 
-    def __init__(self):
-        super().__init__()
-        self._in_abstract = False
-        self._depth = 0
-        self.abstract = []
+    soup = BeautifulSoup(html, "html.parser")
+    cards = []
 
-    def handle_starttag(self, tag, attrs):
-        attrs_dict = dict(attrs)
-        if "field--name-body" in attrs_dict.get("class", ""):
-            self._in_abstract = True
-            self._depth = 0
-        if self._in_abstract:
-            self._depth += 1
+    for row in soup.select("div.table-row__content"):
+        try:
+            link_el = row.select_one("a.table-row__link")
+            if not link_el:
+                continue
 
-    def handle_endtag(self, tag):
-        if self._in_abstract:
-            self._depth -= 1
-            if self._depth <= 0:
-                self._in_abstract = False
+            href = link_el.get("href", "")
+            title_span = link_el.select_one("span")
+            title = title_span.get_text(strip=True) if title_span else link_el.get_text(strip=True)
 
-    def handle_data(self, data):
-        if self._in_abstract and data.strip():
-            self.abstract.append(data.strip())
+            proj_url = urljoin(BASE_URL, href) if href else None
+            if not proj_url or not title:
+                continue
 
+            org_el = row.select_one("div.table-row__organization")
+            pi_el = row.select_one("div.table-row__lead")
+            status_el = row.select_one("div.table-row__awarded")
+            type_el = row.select_one("div.table-row__project-type")
 
-def _slug_from_url(url: str) -> str:
-    return url.rstrip("/").split("/")[-1]
+            cards.append({
+                "title": title,
+                "url": proj_url,
+                "organization": org_el.get_text(strip=True) if org_el else None,
+                "pi_name": pi_el.get_text(strip=True) if pi_el else None,
+                "status_raw": status_el.get_text(strip=True) if status_el else "",
+                "research_type": type_el.get_text(strip=True) if type_el else None,
+            })
+        except Exception:
+            continue
+
+    return cards
 
 
 def pull_pcori():
-    session = requests.Session()
-    session.headers.update({"User-Agent": "AiCurePOC/1.0 (research use)"})
+    if not _HAS_PLAYWRIGHT:
+        print("  [WARN] playwright not installed; skipping PCORI.")
+        print("  PCORI: 0 grants inserted")
+        return
 
     seen_urls: set = set()
     total_inserted = 0
 
-    for term in SEARCH_TERMS:
-        page = 0
-        while True:
-            url = f"{BASE_URL}/research-results/find-pcori-funded-project?topic={term}&page={page}"
-            try:
-                resp = session.get(url, timeout=20)
-                resp.raise_for_status()
-                html = resp.text
-            except Exception as e:
-                print(f"  [WARN] PCORI fetch failed (term={term!r}, page={page}): {e}")
-                break
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        ctx = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
+        )
+        page = ctx.new_page()
 
-            parser = _CardParser()
-            parser.feed(html)
-            links = [l for l in parser.links if l not in seen_urls]
-
-            if not links:
-                break
-
-            for proj_url in links:
-                seen_urls.add(proj_url)
+        try:
+            for term in SEARCH_TERMS:
+                url = f"{PORTFOLIO_URL}?keyword={term}"
                 try:
-                    detail_resp = session.get(proj_url, timeout=20)
-                    detail_resp.raise_for_status()
-                    dp = _DetailParser()
-                    dp.feed(detail_resp.text)
-                    abstract = " ".join(dp.abstract)[:5000]
-
-                    title_match = re.search(r"<title>([^<]+)</title>", detail_resp.text)
-                    title = title_match.group(1).replace(" | PCORI", "").strip() if title_match else proj_url
-
-                    combined = f"{title} {abstract}"
-                    if not is_medical(combined):
+                    page.goto(url, wait_until="networkidle", timeout=45000)
+                except PWTimeoutError:
+                    try:
+                        page.wait_for_selector("div.table-row__content", timeout=10000)
+                    except PWTimeoutError:
+                        print(f"  [WARN] PCORI timeout loading term={term!r}")
                         continue
+                except Exception as e:
+                    print(f"  [WARN] PCORI navigate failed (term={term!r}): {e}")
+                    continue
 
-                    slug = _slug_from_url(proj_url)
-                    nct = extract_nct(combined)
+                # Click "Load more" / "Next page" until exhausted (up to 20 pages)
+                for _ in range(20):
+                    try:
+                        btn = page.locator(
+                            "button:has-text('Load more'), "
+                            "a:has-text('Load more'), "
+                            ".pager__item--next a, "
+                            "li.pager__item--next a"
+                        )
+                        if btn.count() > 0 and btn.first.is_visible(timeout=2000):
+                            btn.first.click()
+                            page.wait_for_load_state("networkidle", timeout=10000)
+                            time.sleep(0.5)
+                        else:
+                            break
+                    except Exception:
+                        break
+
+                html = page.content()
+
+                if os.environ.get("AICURE_SNAPSHOTS") == "1":
+                    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+                    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+                    safe = term.replace(" ", "_")
+                    path = os.path.join(SNAPSHOT_DIR, f"pcori_{safe}_{ts}.html")
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(html)
+
+                cards = _parse_cards(html)
+
+                for card in cards:
+                    proj_url = card["url"]
+                    if proj_url in seen_urls:
+                        continue
+                    seen_urls.add(proj_url)
+
+                    title = card["title"]
+                    combined = title
+                    status_raw = card.get("status_raw", "")
+                    status = "COMPLETED" if "complet" in status_raw.lower() else "ACTIVE"
+
+                    slug = proj_url.rstrip("/").split("/")[-1]
+                    nct = extract_nct(title)
 
                     record = {
                         "id": f"PCORI-{slug}",
                         "source": "PCORI",
                         "award_id": slug,
                         "title": title[:500],
-                        "abstract": abstract,
+                        "organization": card.get("organization"),
+                        "org_type": "ACADEMIC",
+                        "pi_name": card.get("pi_name"),
                         "sponsor_funder": "PCORI",
+                        "research_type": card.get("research_type"),
+                        "currency": "USD",
                         "country": "US",
-                        "status": "ACTIVE",
+                        "status": status,
                         "therapeutic_area": classify_area(combined),
+                        "conditions": extract_conditions(combined),
+                        "interventions": extract_interventions(combined),
+                        "phase_mentioned": extract_phase(combined),
                         "source_url": proj_url,
                         "linked_trial_id": nct,
                         "has_trial_link": 1 if nct else 0,
                     }
                     upsert_grant(record)
                     total_inserted += 1
-                    time.sleep(1.0)
-                except Exception as e:
-                    print(f"  [WARN] PCORI detail error ({proj_url}): {e}")
 
-            page += 1
-            time.sleep(1.0)
+                time.sleep(2.0)
+
+        finally:
+            ctx.close()
+            browser.close()
 
     print(f"  PCORI: {total_inserted} grants inserted")

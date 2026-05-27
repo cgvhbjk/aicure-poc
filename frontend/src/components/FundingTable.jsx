@@ -4,6 +4,8 @@ import { getGrants } from '../api'
 import GrantDetailPanel from './GrantDetailPanel'
 import FieldsPanel from './FieldsPanel'
 
+const _API_BASE = import.meta.env.PROD ? '' : 'http://localhost:8000'
+
 // ── Cell renderers ────────────────────────────────────────────────────────────
 
 const SOURCE_STYLES = {
@@ -14,6 +16,14 @@ const SOURCE_STYLES = {
   UKRI:         { background: '#ede9fe', color: '#6d28d9' },
   AHA:          { background: '#fee2e2', color: '#991b1b' },
   ADA:          { background: '#ffedd5', color: '#9a3412' },
+}
+
+const ORG_TYPE_STYLES = {
+  ACADEMIC:    { background: '#dbeafe', color: '#1e40af' },
+  INDUSTRY:    { background: '#e0e7ff', color: '#3730a3' },
+  NONPROFIT:   { background: '#ccfbf1', color: '#0f766e' },
+  GOVERNMENT:  { background: '#f1f5f9', color: '#475569' },
+  OTHER:       { background: '#f1f5f9', color: '#475569' },
 }
 
 function SourceBadge({ value }) {
@@ -27,6 +37,22 @@ function StatusBadge({ value }) {
   const style = value === 'ACTIVE'
     ? { background: '#dcfce7', color: '#166534' }
     : { background: '#f1f5f9', color: '#475569' }
+  return <span className="badge" style={style}>{value}</span>
+}
+
+function ActivityCodeBadge({ value }) {
+  if (!value) return null
+  return (
+    <span className="badge" style={{
+      background: '#f1f5f9', color: '#334155',
+      fontFamily: 'monospace', fontSize: 11, letterSpacing: '0.02em',
+    }}>{value}</span>
+  )
+}
+
+function OrgTypeBadge({ value }) {
+  if (!value) return null
+  const style = ORG_TYPE_STYLES[value] || ORG_TYPE_STYLES.OTHER
   return <span className="badge" style={style}>{value}</span>
 }
 
@@ -44,6 +70,25 @@ function AmountCell({ value }) {
   const n = Number(value)
   if (isNaN(n)) return <span style={{ color: '#cbd5e1' }}>—</span>
   return <span style={{ textAlign: 'right', display: 'block' }}>${n.toLocaleString()}</span>
+}
+
+function OriginalAmountCell({ data }) {
+  if (!data) return null
+  const { amount_original, currency } = data
+  if (amount_original == null) return <span style={{ color: '#cbd5e1' }}>—</span>
+  const n = Number(amount_original)
+  if (isNaN(n)) return <span style={{ color: '#cbd5e1' }}>—</span>
+  const sym = currency === 'GBP' ? '£' : currency === 'EUR' ? '€' : '$'
+  return (
+    <span style={{ textAlign: 'right', display: 'block' }}>
+      {sym}{n.toLocaleString()} {currency}
+    </span>
+  )
+}
+
+function PiEmailCell({ value }) {
+  if (!value) return <span style={{ color: '#cbd5e1' }}>—</span>
+  return <a href={`mailto:${value}`} onClick={(e) => e.stopPropagation()}>{value}</a>
 }
 
 function NctLink({ value }) {
@@ -72,6 +117,18 @@ function TruncatedText({ value }) {
   return <span title={value}>{short}{value.length > 120 ? '…' : ''}</span>
 }
 
+function JsonArrayCell({ value }) {
+  if (!value) return null
+  try {
+    const arr = JSON.parse(value)
+    const items = Array.isArray(arr) ? arr.filter(Boolean) : [String(value)]
+    if (!items.length) return null
+    return <span title={items.join(', ')}>{items.join(', ')}</span>
+  } catch {
+    return <span>{String(value)}</span>
+  }
+}
+
 function DateCell({ value }) {
   if (!value) return <span style={{ color: '#cbd5e1' }}>—</span>
   return <span>{String(value).slice(0, 10)}</span>
@@ -82,24 +139,37 @@ function DateCell({ value }) {
 const BASE = { sortable: true, resizable: true, filter: true }
 
 const COLUMN_DEFS = [
-  { ...BASE, field: 'has_trial_link',  headerName: '🔗',              width: 48,  hide: false, cellRenderer: TrialLinkDot,  filter: false, resizable: false, maxWidth: 48 },
-  { ...BASE, field: 'source',          headerName: 'Source',          width: 130, hide: false, cellRenderer: SourceBadge },
-  { ...BASE, field: 'therapeutic_area',headerName: 'Area',            width: 150, hide: false },
-  { ...BASE, field: 'title',           headerName: 'Grant Title',     width: 320, hide: false },
-  { ...BASE, field: 'status',          headerName: 'Status',          width: 110, hide: false, cellRenderer: StatusBadge },
-  { ...BASE, field: 'sponsor_funder',  headerName: 'Funder',          width: 160, hide: false },
-  { ...BASE, field: 'organization',    headerName: 'Recipient',       width: 200, hide: false },
-  { ...BASE, field: 'pi_name',         headerName: 'PI',              width: 160, hide: false },
-  { ...BASE, field: 'amount_usd',      headerName: 'Amount (USD)',    width: 130, hide: false, cellRenderer: AmountCell, type: 'numericColumn' },
-  { ...BASE, field: 'country',         headerName: 'Country',         width: 100, hide: false },
-  { ...BASE, field: 'award_date',      headerName: 'Awarded',         width: 100, hide: false, cellRenderer: DateCell },
+  { ...BASE, field: 'has_trial_link',   headerName: '🔗',                  width: 48,  hide: false, cellRenderer: TrialLinkDot,        filter: false, resizable: false, maxWidth: 48 },
+  { ...BASE, field: 'source',           headerName: 'Source',               width: 130, hide: false, cellRenderer: SourceBadge },
+  { ...BASE, field: 'therapeutic_area', headerName: 'Area',                 width: 150, hide: false },
+  { ...BASE, field: 'title',            headerName: 'Grant Title',          width: 320, hide: false },
+  { ...BASE, field: 'status',           headerName: 'Status',               width: 110, hide: false, cellRenderer: StatusBadge },
+  { ...BASE, field: 'sponsor_funder',   headerName: 'Funder',               width: 160, hide: false },
+  { ...BASE, field: 'agency_division',  headerName: 'Division / Programme', width: 180, hide: false },
+  { ...BASE, field: 'activity_code',    headerName: 'Award Type',           width: 110, hide: false, cellRenderer: ActivityCodeBadge },
+  { ...BASE, field: 'organization',     headerName: 'Recipient',            width: 200, hide: false },
+  { ...BASE, field: 'org_type',         headerName: 'Org Type',             width: 120, hide: false, cellRenderer: OrgTypeBadge },
+  { ...BASE, field: 'pi_name',          headerName: 'PI',                   width: 160, hide: false },
+  { ...BASE, field: 'amount_usd',       headerName: 'Amount (USD)',         width: 130, hide: false, cellRenderer: AmountCell, type: 'numericColumn' },
+  { ...BASE, field: 'country',          headerName: 'Country',              width: 100, hide: false },
+  { ...BASE, field: 'award_date',       headerName: 'Awarded',              width: 100, hide: false, cellRenderer: DateCell },
   // Hidden by default
-  { ...BASE, field: 'start_date',      headerName: 'Start',           width: 100, hide: true,  cellRenderer: DateCell },
-  { ...BASE, field: 'end_date',        headerName: 'End',             width: 100, hide: true,  cellRenderer: DateCell },
-  { ...BASE, field: 'linked_trial_id', headerName: 'Linked Trial',    width: 130, hide: true,  cellRenderer: NctLink },
-  { ...BASE, field: 'abstract',        headerName: 'Abstract',        width: 300, hide: true,  cellRenderer: TruncatedText },
-  { ...BASE, field: 'source_url',      headerName: 'Source URL',      width: 200, hide: true,  cellRenderer: SourceUrlCell },
-  { ...BASE, field: 'award_id',        headerName: 'Award ID',        width: 160, hide: true },
+  { ...BASE, field: 'fiscal_year',      headerName: 'Fiscal Year',          width: 100, hide: true },
+  { ...BASE, field: 'start_date',       headerName: 'Start',                width: 100, hide: true,  cellRenderer: DateCell },
+  { ...BASE, field: 'end_date',         headerName: 'End',                  width: 100, hide: true,  cellRenderer: DateCell },
+  { ...BASE, field: 'project_acronym',  headerName: 'Acronym',              width: 110, hide: true },
+  { ...BASE, field: 'research_type',    headerName: 'Research Type',        width: 160, hide: true },
+  { ...BASE, field: 'conditions',       headerName: 'Conditions',           width: 220, hide: true,  cellRenderer: JsonArrayCell },
+  { ...BASE, field: 'interventions',    headerName: 'Interventions',        width: 220, hide: true,  cellRenderer: JsonArrayCell },
+  { ...BASE, field: 'phase_mentioned',  headerName: 'Phase',                width: 90,  hide: true },
+  { ...BASE, field: 'pi_email',         headerName: 'PI Email',             width: 200, hide: true,  cellRenderer: PiEmailCell },
+  { ...BASE, field: 'amount_original',  headerName: 'Orig. Amount',         width: 140, hide: true,  cellRenderer: OriginalAmountCell },
+  { ...BASE, field: 'currency',         headerName: 'Currency',             width: 80,  hide: true },
+  { ...BASE, field: 'linked_trial_id',  headerName: 'Linked Trial',         width: 130, hide: true,  cellRenderer: NctLink },
+  { ...BASE, field: 'abstract',         headerName: 'Abstract',             width: 300, hide: true,  cellRenderer: TruncatedText },
+  { ...BASE, field: 'source_url',       headerName: 'Source URL',           width: 200, hide: true,  cellRenderer: SourceUrlCell },
+  { ...BASE, field: 'award_id',         headerName: 'Award ID',             width: 160, hide: true },
+  { ...BASE, field: 'ingested_at',      headerName: 'Ingested',             width: 130, hide: true,  cellRenderer: DateCell },
 ]
 
 const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: true }
@@ -129,9 +199,27 @@ export default function FundingTable({ filters, onSelectTrial }) {
   const [selectedAreas, setSelectedAreas] = useState([])
   const [selectedStatuses, setSelectedStatuses] = useState([])
   const [selectedCountries, setSelectedCountries] = useState([])
+  const [selectedActivityCodes, setSelectedActivityCodes] = useState([])
+  const [selectedOrgTypes, setSelectedOrgTypes] = useState([])
+  const [selectedResearchTypes, setSelectedResearchTypes] = useState([])
+  const [selectedDivisions, setSelectedDivisions] = useState([])
   const [hasTrialOnly, setHasTrialOnly] = useState(false)
   const [minAmount, setMinAmount] = useState('')
   const [maxAmount, setMaxAmount] = useState('')
+  const [fiscalYearMin, setFiscalYearMin] = useState('')
+  const [fiscalYearMax, setFiscalYearMax] = useState('')
+
+  // Dynamic filter options from backend
+  const [filterOptions, setFilterOptions] = useState({
+    activity_codes: [], org_types: [], research_types: [], agency_divisions: [],
+  })
+
+  useEffect(() => {
+    fetch(`${_API_BASE}/grants/filter-options`)
+      .then((r) => r.json())
+      .then(setFilterOptions)
+      .catch(console.error)
+  }, [])
 
   const toggle = (setFn) => (item) =>
     setFn((prev) => prev.includes(item) ? prev.filter(x => x !== item) : [...prev, item])
@@ -145,6 +233,12 @@ export default function FundingTable({ filters, onSelectTrial }) {
     has_trial_link: hasTrialOnly || undefined,
     min_amount: minAmount ? Number(minAmount) : undefined,
     max_amount: maxAmount ? Number(maxAmount) : undefined,
+    activity_code: selectedActivityCodes.length ? selectedActivityCodes : undefined,
+    org_type: selectedOrgTypes.length ? selectedOrgTypes : undefined,
+    research_type: selectedResearchTypes.length ? selectedResearchTypes : undefined,
+    agency_division: selectedDivisions.length ? selectedDivisions : undefined,
+    fiscal_year_min: fiscalYearMin ? Number(fiscalYearMin) : undefined,
+    fiscal_year_max: fiscalYearMax ? Number(fiscalYearMax) : undefined,
     ...filters,
   }
 
@@ -172,6 +266,9 @@ export default function FundingTable({ filters, onSelectTrial }) {
   const SOURCES = ['NIH_REPORTER', 'USASPENDING', 'PCORI', 'CORDIS', 'UKRI', 'AHA', 'ADA']
   const AREAS = ['Metabolic / GLP-1', 'Diabetes', 'Cardiovascular', 'Adherence / Outcomes', 'Other']
   const STATUSES = ['ACTIVE', 'COMPLETED']
+  const ORG_TYPES = filterOptions.org_types.length
+    ? filterOptions.org_types
+    : ['ACADEMIC', 'INDUSTRY', 'NONPROFIT', 'GOVERNMENT', 'OTHER']
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -245,10 +342,59 @@ export default function FundingTable({ filters, onSelectTrial }) {
                 ))}
               </div>
               <div className="filter-group">
-                <label className="checkbox-label">
-                  <input type="checkbox" checked={hasTrialOnly} onChange={() => setHasTrialOnly(v => !v)} />
-                  Has trial link only
-                </label>
+                <div className="filter-label">Org Type</div>
+                {ORG_TYPES.map((t) => (
+                  <label key={t} className="checkbox-label">
+                    <input type="checkbox" checked={selectedOrgTypes.includes(t)} onChange={() => toggle(setSelectedOrgTypes)(t)} />
+                    {t}
+                  </label>
+                ))}
+              </div>
+              {filterOptions.activity_codes.length > 0 && (
+                <div className="filter-group">
+                  <div className="filter-label">Award Type</div>
+                  {filterOptions.activity_codes.map((c) => (
+                    <label key={c} className="checkbox-label">
+                      <input type="checkbox" checked={selectedActivityCodes.includes(c)} onChange={() => toggle(setSelectedActivityCodes)(c)} />
+                      <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{c}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {filterOptions.research_types.length > 0 && (
+                <div className="filter-group">
+                  <div className="filter-label">Research Type</div>
+                  {filterOptions.research_types.slice(0, 15).map((r) => (
+                    <label key={r} className="checkbox-label">
+                      <input type="checkbox" checked={selectedResearchTypes.includes(r)} onChange={() => toggle(setSelectedResearchTypes)(r)} />
+                      <span title={r}>{r.length > 35 ? r.slice(0, 35) + '…' : r}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {filterOptions.agency_divisions.length > 0 && (
+                <div className="filter-group">
+                  <div className="filter-label">Agency / Division</div>
+                  {filterOptions.agency_divisions.map((d) => (
+                    <label key={d} className="checkbox-label">
+                      <input type="checkbox" checked={selectedDivisions.includes(d)} onChange={() => toggle(setSelectedDivisions)(d)} />
+                      <span title={d}>{d.length > 30 ? d.slice(0, 30) + '…' : d}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <div className="filter-group">
+                <div className="filter-label">Fiscal Year</div>
+                <input
+                  className="search-input" type="number" placeholder="From (e.g. 2022)"
+                  value={fiscalYearMin} onChange={(e) => setFiscalYearMin(e.target.value)}
+                  style={{ width: '100%', marginBottom: 4 }}
+                />
+                <input
+                  className="search-input" type="number" placeholder="To (e.g. 2025)"
+                  value={fiscalYearMax} onChange={(e) => setFiscalYearMax(e.target.value)}
+                  style={{ width: '100%' }}
+                />
               </div>
               <div className="filter-group">
                 <div className="filter-label">Amount (USD)</div>
@@ -263,9 +409,18 @@ export default function FundingTable({ filters, onSelectTrial }) {
                   style={{ width: '100%' }}
                 />
               </div>
+              <div className="filter-group">
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={hasTrialOnly} onChange={() => setHasTrialOnly(v => !v)} />
+                  Has trial link only
+                </label>
+              </div>
               <button className="btn-clear" onClick={() => {
                 setSelectedSources([]); setSelectedAreas([]); setSelectedStatuses([])
-                setSelectedCountries([]); setHasTrialOnly(false); setMinAmount(''); setMaxAmount('')
+                setSelectedCountries([]); setSelectedActivityCodes([]); setSelectedOrgTypes([])
+                setSelectedResearchTypes([]); setSelectedDivisions([])
+                setHasTrialOnly(false); setMinAmount(''); setMaxAmount('')
+                setFiscalYearMin(''); setFiscalYearMax('')
               }}>
                 Clear all filters
               </button>

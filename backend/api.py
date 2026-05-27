@@ -1101,6 +1101,43 @@ def get_grants_stats():
     }
 
 
+@app.get("/grants/filter-options")
+def get_grants_filter_options():
+    conn = get_connection()
+    activity_codes = [
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT activity_code FROM grants "
+            "WHERE activity_code IS NOT NULL ORDER BY activity_code"
+        ).fetchall()
+    ]
+    org_types = [
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT org_type FROM grants "
+            "WHERE org_type IS NOT NULL ORDER BY org_type"
+        ).fetchall()
+    ]
+    research_types = [
+        r[0] for r in conn.execute(
+            "SELECT DISTINCT research_type FROM grants "
+            "WHERE research_type IS NOT NULL ORDER BY research_type"
+        ).fetchall()
+    ]
+    agency_divisions = [
+        r[0] for r in conn.execute(
+            "SELECT agency_division, COUNT(*) AS n FROM grants "
+            "WHERE agency_division IS NOT NULL "
+            "GROUP BY agency_division ORDER BY n DESC LIMIT 20"
+        ).fetchall()
+    ]
+    conn.close()
+    return {
+        "activity_codes": activity_codes,
+        "org_types": org_types,
+        "research_types": research_types,
+        "agency_divisions": agency_divisions,
+    }
+
+
 @app.get("/grants")
 def get_grants(
     q: Optional[str] = None,
@@ -1111,6 +1148,12 @@ def get_grants(
     has_trial_link: Optional[bool] = None,
     min_amount: Optional[int] = None,
     max_amount: Optional[int] = None,
+    activity_code: Optional[List[str]] = Query(default=None),
+    org_type: Optional[List[str]] = Query(default=None),
+    research_type: Optional[List[str]] = Query(default=None),
+    agency_division: Optional[List[str]] = Query(default=None),
+    fiscal_year_min: Optional[int] = None,
+    fiscal_year_max: Optional[int] = None,
     page: int = 1,
     page_size: int = 100,
 ):
@@ -1159,6 +1202,34 @@ def get_grants(
     if max_amount is not None:
         where_clauses.append("amount_usd <= ?")
         params.append(max_amount)
+
+    if activity_code:
+        placeholders = ",".join("?" * len(activity_code))
+        where_clauses.append(f"activity_code IN ({placeholders})")
+        params.extend(activity_code)
+
+    if org_type:
+        placeholders = ",".join("?" * len(org_type))
+        where_clauses.append(f"org_type IN ({placeholders})")
+        params.extend(org_type)
+
+    if research_type:
+        placeholders = ",".join("?" * len(research_type))
+        where_clauses.append(f"research_type IN ({placeholders})")
+        params.extend(research_type)
+
+    if agency_division:
+        placeholders = ",".join("?" * len(agency_division))
+        where_clauses.append(f"agency_division IN ({placeholders})")
+        params.extend(agency_division)
+
+    if fiscal_year_min is not None:
+        where_clauses.append("fiscal_year >= ?")
+        params.append(fiscal_year_min)
+
+    if fiscal_year_max is not None:
+        where_clauses.append("fiscal_year <= ?")
+        params.append(fiscal_year_max)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 

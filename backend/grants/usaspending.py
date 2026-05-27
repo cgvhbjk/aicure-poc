@@ -5,13 +5,15 @@ from datetime import datetime
 
 import requests
 
-from grant_utils import is_medical, classify_area, upsert_grant
+from grant_utils import (
+    is_medical, classify_area, upsert_grant,
+    extract_phase, extract_conditions, extract_interventions,
+)
 from registry_utils import extract_nct
 
 SEARCH_BODY = {
     "filters": {
         "award_type_codes": ["02", "03", "04", "05"],
-        "naics_codes": ["541714", "541715", "621111", "621999"],
         "keywords": ["clinical trial", "obesity", "GLP-1", "diabetes", "cardiac adherence"],
         "time_period": [{"start_date": "2020-01-01", "end_date": "2099-12-31"}],
         "award_amounts": [{"lower_bound": 100000}],
@@ -26,6 +28,21 @@ SEARCH_BODY = {
     "sort": "Award Amount",
     "order": "desc",
 }
+
+
+def _infer_org_type(name: str) -> str:
+    if not name:
+        return "OTHER"
+    n = name.lower()
+    if any(k in n for k in ["university", "college", "institute", "hospital", "school of"]):
+        return "ACADEMIC"
+    if any(n.endswith(s) for s in [" inc", " inc.", " llc", " corp", " corp.", " ltd", " ltd."]):
+        return "INDUSTRY"
+    if "," in name:
+        last = name.split(",")[-1].strip().lower()
+        if last in ("inc", "inc.", "llc", "corp", "corp.", "ltd", "ltd."):
+            return "INDUSTRY"
+    return "OTHER"
 
 
 def pull_usaspending():
@@ -65,7 +82,13 @@ def pull_usaspending():
                 agency = award.get("Awarding Agency") or ""
                 sub_agency = award.get("Awarding Sub Agency") or ""
                 funder = f"{agency} / {sub_agency}".strip(" /") if sub_agency else agency
+
+                start_date = award.get("Start Date") or ""
+                fiscal_year = int(start_date[:4]) if start_date and start_date[:4].isdigit() else None
+
+                recipient_name = award.get("Recipient Name") or ""
                 nct = extract_nct(combined)
+                amount = int(award.get("Award Amount") or 0) or None
 
                 record = {
                     "id": f"USA-{award_id}",
@@ -73,15 +96,23 @@ def pull_usaspending():
                     "award_id": award_id,
                     "title": title,
                     "abstract": description[:5000],
-                    "organization": award.get("Recipient Name"),
-                    "amount_usd": int(award.get("Award Amount") or 0) or None,
-                    "start_date": award.get("Start Date"),
+                    "organization": recipient_name,
+                    "org_type": _infer_org_type(recipient_name),
+                    "amount_usd": amount,
+                    "amount_original": amount,
+                    "currency": "USD",
+                    "start_date": start_date or None,
                     "end_date": award.get("End Date"),
                     "sponsor_funder": funder,
+                    "agency_division": sub_agency or None,
+                    "fiscal_year": fiscal_year,
                     "status": "ACTIVE",
                     "country": "US",
                     "source_url": f"https://www.usaspending.gov/award/{award_id}",
                     "therapeutic_area": classify_area(combined),
+                    "conditions": extract_conditions(combined),
+                    "interventions": extract_interventions(combined),
+                    "phase_mentioned": extract_phase(combined),
                     "linked_trial_id": nct,
                     "has_trial_link": 1 if nct else 0,
                 }

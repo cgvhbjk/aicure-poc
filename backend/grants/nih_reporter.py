@@ -5,7 +5,10 @@ from datetime import datetime
 
 import requests
 
-from grant_utils import is_medical, classify_area, upsert_grant
+from grant_utils import (
+    is_medical, classify_area, upsert_grant,
+    extract_phase, extract_conditions, extract_interventions,
+)
 from registry_utils import extract_nct
 
 SNAPSHOT_DIR = os.path.join(
@@ -30,6 +33,27 @@ SEARCH_BODY = {
     "sort_field": "award_amount",
     "sort_order": "desc",
 }
+
+_ORG_TYPE_MAP = {
+    "SCHOOLS OF MEDICINE": "ACADEMIC",
+    "SCHOOLS OF PUBLIC HEALTH": "ACADEMIC",
+    "HOSPITALS": "ACADEMIC",
+    "UNIVERSITIES": "ACADEMIC",
+    "SMALL BUSINESS": "INDUSTRY",
+    "NONPROFIT": "NONPROFIT",
+}
+
+
+def _map_org_type(raw: str) -> str:
+    if not raw:
+        return "OTHER"
+    upper = raw.upper()
+    for key, val in _ORG_TYPE_MAP.items():
+        if key in upper:
+            return val
+    if "UNIVERSITY" in upper or "COLLEGE" in upper or "INSTITUTE" in upper or "HOSPITAL" in upper:
+        return "ACADEMIC"
+    return "OTHER"
 
 
 def _save_snapshot(page: int, data: dict):
@@ -84,6 +108,11 @@ def pull_nih_reporter():
                 org = proj.get("organization") or {}
                 agency = proj.get("agency_ic_admin") or {}
 
+                fiscal_year = proj.get("fiscal_year")
+                if not fiscal_year:
+                    start = proj.get("project_start_date") or ""
+                    fiscal_year = int(start[:4]) if start and start[:4].isdigit() else None
+
                 nct = extract_nct(combined)
                 record = {
                     "id": f"NIH-{proj['project_num']}",
@@ -94,9 +123,14 @@ def pull_nih_reporter():
                     "pi_name": pi.get("full_name"),
                     "pi_email": pi.get("email"),
                     "organization": org.get("org_name"),
-                    "org_type": org.get("org_type"),
-                    "sponsor_funder": agency.get("abbreviation"),
+                    "org_type": _map_org_type(org.get("org_type") or ""),
+                    "sponsor_funder": "National Institutes of Health",
+                    "agency_division": agency.get("abbreviation"),
+                    "activity_code": proj.get("activity_code"),
+                    "fiscal_year": fiscal_year,
                     "amount_usd": proj.get("award_amount"),
+                    "amount_original": proj.get("award_amount"),
+                    "currency": "USD",
                     "start_date": proj.get("project_start_date"),
                     "end_date": proj.get("project_end_date"),
                     "award_date": proj.get("award_notice_date"),
@@ -104,6 +138,9 @@ def pull_nih_reporter():
                     "therapeutic_area": classify_area(combined),
                     "country": proj.get("org_country", "US"),
                     "source_url": proj.get("project_detail_url"),
+                    "conditions": extract_conditions(combined),
+                    "interventions": extract_interventions(combined),
+                    "phase_mentioned": extract_phase(combined),
                     "linked_trial_id": nct,
                     "has_trial_link": 1 if nct else 0,
                 }

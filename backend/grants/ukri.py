@@ -5,7 +5,10 @@ from datetime import datetime
 
 import requests
 
-from grant_utils import is_medical, classify_area, upsert_grant, GBP_TO_USD
+from grant_utils import (
+    is_medical, classify_area, upsert_grant, GBP_TO_USD,
+    extract_phase, extract_conditions, extract_interventions,
+)
 from registry_utils import extract_nct
 
 SEARCH_TERMS = [
@@ -27,6 +30,15 @@ def _save_snapshot(term: str, page: int, data: dict):
     path = os.path.join(SNAPSHOT_DIR, f"ukri_{safe_term}_{ts}_p{page}.json")
     with open(path, "w") as f:
         json.dump(data, f)
+
+
+def _infer_org_type(dept: str) -> str:
+    if not dept:
+        return "NONPROFIT"
+    d = dept.lower()
+    if "university" in d or "college" in d:
+        return "ACADEMIC"
+    return "NONPROFIT"
 
 
 def pull_ukri():
@@ -73,6 +85,13 @@ def pull_ukri():
                     value_gbp = fund.get("valuePounds")
                     amount_usd = int(float(value_gbp) * GBP_TO_USD) if value_gbp else None
 
+                    dept = proj.get("leadOrganisationDepartment") or ""
+                    start = fund.get("start") or ""
+                    fiscal_year = int(start[:4]) if start and start[:4].isdigit() else None
+
+                    research_subjects = proj.get("researchSubject") or []
+                    research_type = research_subjects[0].get("text") if research_subjects else None
+
                     nct = extract_nct(combined)
                     record = {
                         "id": f"UKRI-{proj_id}",
@@ -80,17 +99,25 @@ def pull_ukri():
                         "award_id": proj_id,
                         "title": title[:500],
                         "abstract": abstract[:5000],
-                        "organization": proj.get("leadOrganisationDepartment"),
+                        "organization": dept or None,
+                        "org_type": _infer_org_type(dept),
                         "amount_original": float(value_gbp) if value_gbp else None,
                         "currency": "GBP",
                         "amount_usd": amount_usd,
-                        "start_date": fund.get("start"),
+                        "start_date": start or None,
                         "end_date": fund.get("end"),
+                        "fiscal_year": fiscal_year,
                         "status": "ACTIVE" if proj.get("status") in ("Active", "live") else "COMPLETED",
                         "sponsor_funder": funder_info.get("name"),
+                        "agency_division": funder_info.get("name"),
+                        "activity_code": proj.get("grantCategory"),
+                        "research_type": research_type,
                         "country": "UK",
                         "therapeutic_area": classify_area(combined),
                         "source_url": f"https://gtr.ukri.org/projects?ref={proj_id}",
+                        "conditions": extract_conditions(combined),
+                        "interventions": extract_interventions(combined),
+                        "phase_mentioned": extract_phase(combined),
                         "linked_trial_id": nct,
                         "has_trial_link": 1 if nct else 0,
                     }

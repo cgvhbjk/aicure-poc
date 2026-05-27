@@ -263,6 +263,11 @@ def _init_db():
         "ALTER TABLE trials ADD COLUMN rebec_id TEXT",
         "ALTER TABLE trials ADD COLUMN pactr_id TEXT",
         "ALTER TABLE merge_candidates ADD COLUMN loser_snapshot TEXT",
+        "ALTER TABLE grants ADD COLUMN activity_code TEXT",
+        "ALTER TABLE grants ADD COLUMN agency_division TEXT",
+        "ALTER TABLE grants ADD COLUMN fiscal_year INTEGER",
+        "ALTER TABLE grants ADD COLUMN project_acronym TEXT",
+        "ALTER TABLE grants ADD COLUMN research_type TEXT",
     ]:
         try:
             conn.execute(alter)

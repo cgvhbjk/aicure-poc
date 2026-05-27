@@ -78,8 +78,6 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
 
   // Grant stats
   const [grantStats, setGrantStats] = useState(null)
-  // Grant detail panel opened from FundingTable
-  const [selectedGrant, setSelectedGrant] = useState(null)
 
   const trialApiRef = useRef(null)
   // Bumped whenever AG Grid column/sort/filter state mutates, so ViewsSidebar
@@ -140,7 +138,6 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
     setAnnouncementsOnly(false)
     setResultsOnly(false)
     setSelectedOrgTypes([])
-    setSelectedWhiteLabel([])
     setOrgHasTrialsOnly(false)
   }
 

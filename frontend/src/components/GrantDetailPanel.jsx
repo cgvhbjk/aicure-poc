@@ -18,7 +18,7 @@ const SOURCE_STYLES = {
 }
 
 const TRIAL_STATUS_STYLES = {
-  RECRUITING:             { background: '#dcfce7', color: '#166534' },
+  RECRUITING:             { background: '#dcfce7', color: '#166634' },
   NOT_YET_RECRUITING:     { background: '#dbeafe', color: '#1e40af' },
   ACTIVE_NOT_RECRUITING:  { background: '#fef9c3', color: '#854d0e' },
   COMPLETED:              { background: '#f1f5f9', color: '#475569' },
@@ -29,6 +29,40 @@ function fmtUsd(n) {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`
   return `$${n.toLocaleString()}`
+}
+
+function fmtOriginalAmount(amount_original, currency) {
+  if (amount_original == null || !currency) return null
+  const n = Number(amount_original)
+  if (isNaN(n)) return null
+  const sym = currency === 'GBP' ? '£' : currency === 'EUR' ? '€' : '$'
+  return `${sym}${n.toLocaleString()} ${currency}`
+}
+
+function TagList({ items }) {
+  if (!items || !items.length) return <span style={{ color: '#94a3b8' }}>—</span>
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+      {items.map((item) => (
+        <span key={item} className="badge" style={{
+          background: '#f1f5f9', color: '#475569',
+          fontSize: 11, border: '1px solid #e2e8f0',
+        }}>
+          {item}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function parseJsonArray(val) {
+  if (!val) return []
+  try {
+    const arr = JSON.parse(val)
+    return Array.isArray(arr) ? arr.filter(Boolean) : []
+  } catch {
+    return []
+  }
 }
 
 export default function GrantDetailPanel({ grant, onClose, onSelectTrial }) {
@@ -49,6 +83,10 @@ export default function GrantDetailPanel({ grant, onClose, onSelectTrial }) {
 
   const statusStyle = STATUS_STYLES[grant.status] || STATUS_STYLES.UNKNOWN
   const sourceStyle = SOURCE_STYLES[grant.source] || { background: '#f1f5f9', color: '#475569' }
+  const conditions = parseJsonArray(grant.conditions)
+  const interventions = parseJsonArray(grant.interventions)
+  const showOriginal = grant.currency && grant.currency !== 'USD' && grant.amount_original != null
+  const origFmt = fmtOriginalAmount(grant.amount_original, grant.currency)
 
   return (
     <>
@@ -71,6 +109,11 @@ export default function GrantDetailPanel({ grant, onClose, onSelectTrial }) {
                 {grant.therapeutic_area}
               </span>
             )}
+            {grant.activity_code && (
+              <span className="badge" style={{ background: '#f1f5f9', color: '#334155', fontFamily: 'monospace', fontSize: 11 }}>
+                {grant.activity_code}
+              </span>
+            )}
           </div>
 
           {/* Funder section */}
@@ -83,6 +126,18 @@ export default function GrantDetailPanel({ grant, onClose, onSelectTrial }) {
                   <span className="detail-field-value">{grant.sponsor_funder}</span>
                 </>
               )}
+              {grant.agency_division && (
+                <>
+                  <span className="detail-field-label">Division</span>
+                  <span className="detail-field-value">{grant.agency_division}</span>
+                </>
+              )}
+              {grant.activity_code && (
+                <>
+                  <span className="detail-field-label">Award Type</span>
+                  <span className="detail-field-value" style={{ fontFamily: 'monospace' }}>{grant.activity_code}</span>
+                </>
+              )}
               {grant.award_id && (
                 <>
                   <span className="detail-field-label">Award ID</span>
@@ -92,7 +147,32 @@ export default function GrantDetailPanel({ grant, onClose, onSelectTrial }) {
               {grant.amount_usd != null && (
                 <>
                   <span className="detail-field-label">Amount (USD)</span>
-                  <span className="detail-field-value" style={{ fontWeight: 600 }}>{fmtUsd(grant.amount_usd)}</span>
+                  <span className="detail-field-value" style={{ fontWeight: 600 }}>
+                    {fmtUsd(grant.amount_usd)}
+                    {showOriginal && origFmt && (
+                      <span style={{ marginLeft: 8, color: '#64748b', fontWeight: 400, fontSize: 12 }}>
+                        ({origFmt})
+                      </span>
+                    )}
+                  </span>
+                </>
+              )}
+              {grant.fiscal_year && (
+                <>
+                  <span className="detail-field-label">Fiscal Year</span>
+                  <span className="detail-field-value">{grant.fiscal_year}</span>
+                </>
+              )}
+              {grant.research_type && (
+                <>
+                  <span className="detail-field-label">Research Type</span>
+                  <span className="detail-field-value">{grant.research_type}</span>
+                </>
+              )}
+              {grant.project_acronym && (
+                <>
+                  <span className="detail-field-label">Acronym</span>
+                  <span className="detail-field-value" style={{ fontFamily: 'monospace' }}>{grant.project_acronym}</span>
                 </>
               )}
               {grant.award_date && (
@@ -120,6 +200,12 @@ export default function GrantDetailPanel({ grant, onClose, onSelectTrial }) {
                 <>
                   <span className="detail-field-label">Institution</span>
                   <span className="detail-field-value">{grant.organization}</span>
+                </>
+              )}
+              {grant.org_type && (
+                <>
+                  <span className="detail-field-label">Org Type</span>
+                  <span className="detail-field-value">{grant.org_type}</span>
                 </>
               )}
               {grant.pi_name && (
@@ -156,6 +242,33 @@ export default function GrantDetailPanel({ grant, onClose, onSelectTrial }) {
                 marginTop: 6,
               }}>
                 {grant.abstract}
+              </div>
+            </div>
+          )}
+
+          {/* Research focus */}
+          {(conditions.length > 0 || interventions.length > 0 || grant.phase_mentioned) && (
+            <div style={{ marginBottom: 20 }}>
+              <div className="detail-section-title">🔬 Research Focus</div>
+              <div className="detail-fields">
+                {conditions.length > 0 && (
+                  <>
+                    <span className="detail-field-label">Conditions</span>
+                    <span className="detail-field-value"><TagList items={conditions} /></span>
+                  </>
+                )}
+                {interventions.length > 0 && (
+                  <>
+                    <span className="detail-field-label">Interventions</span>
+                    <span className="detail-field-value"><TagList items={interventions} /></span>
+                  </>
+                )}
+                {grant.phase_mentioned && (
+                  <>
+                    <span className="detail-field-label">Phase</span>
+                    <span className="detail-field-value">{grant.phase_mentioned}</span>
+                  </>
+                )}
               </div>
             </div>
           )}
