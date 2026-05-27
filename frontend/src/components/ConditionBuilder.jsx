@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { FILTER_FIELDS, OPERATORS_FOR_TYPE, makeCondition } from '../utils/conditions'
 
-export default function ConditionBuilder({ initialCondition, onApply, onCancel, therapeuticAreas, countries }) {
-  const firstField = FILTER_FIELDS[0]
+export default function ConditionBuilder({ initialCondition, onApply, onCancel, therapeuticAreas, countries, filterFields = FILTER_FIELDS }) {
+  const firstField = filterFields[0]
   const [fieldKey, setFieldKey] = useState(initialCondition?.field ?? firstField.key)
   const [operator, setOperator] = useState(initialCondition?.operator ?? '')
   const [value, setValue] = useState(initialCondition?.value ?? '')
   const wrapRef = useRef(null)
 
-  const fieldDef = FILTER_FIELDS.find(f => f.key === fieldKey) ?? firstField
+  const fieldDef = filterFields.find(f => f.key === fieldKey) ?? firstField
   const operators = OPERATORS_FOR_TYPE[fieldDef.type] ?? []
   const effectiveOperator = operator || operators[0]?.value
 
@@ -74,7 +74,7 @@ export default function ConditionBuilder({ initialCondition, onApply, onCancel, 
           value={fieldKey}
           onChange={e => setFieldKey(e.target.value)}
         >
-          {FILTER_FIELDS.map(f => (
+          {filterFields.map(f => (
             <option key={f.key} value={f.key}>{f.label}</option>
           ))}
         </select>
@@ -98,7 +98,7 @@ export default function ConditionBuilder({ initialCondition, onApply, onCancel, 
 
       {/* Value row */}
       {fieldDef.type === 'boolean' && (
-        <p className="cond-boolean-hint">Filters to trials that have linked news articles.</p>
+        <p className="cond-boolean-hint">{fieldDef.hint || 'Toggle filter.'}</p>
       )}
 
       {fieldDef.type === 'select' && (

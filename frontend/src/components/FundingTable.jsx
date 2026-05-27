@@ -3,6 +3,8 @@ import { AgGridReact } from 'ag-grid-react'
 import { getGrants } from '../api'
 import GrantDetailPanel from './GrantDetailPanel'
 import FieldsPanel from './FieldsPanel'
+import FilterBar from './FilterBar'
+import { FUNDING_FILTER_FIELDS } from '../utils/conditions'
 
 const _API_BASE = import.meta.env.PROD ? '' : 'http://localhost:8000'
 
@@ -183,7 +185,17 @@ function fmtMillions(n) {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function FundingTable({ filters, onSelectTrial }) {
+export default function FundingTable({
+  filters,
+  onSelectTrial,
+  conditions,
+  onAddCondition,
+  onEditCondition,
+  onRemoveCondition,
+  onClearConditions,
+  onGridReady: onGridReadyProp,
+  onGridStateChange,
+}) {
   const gridRef = useRef(null)
   const [rowData, setRowData] = useState([])
   const [loading, setLoading] = useState(false)
@@ -263,6 +275,18 @@ export default function FundingTable({ filters, onSelectTrial }) {
   const onExport = () => gridRef.current?.api?.exportDataAsCsv()
   const onRowClicked = (e) => setSelectedGrant(e.data)
 
+  const handleGridReady = useCallback((params) => {
+    onGridReadyProp?.(params.api)
+    const bump = () => onGridStateChange?.()
+    const events = [
+      'columnVisible', 'columnMoved', 'columnPinned', 'columnResized',
+      'sortChanged', 'filterChanged',
+    ]
+    events.forEach(ev => {
+      try { params.api.addEventListener(ev, bump) } catch {}
+    })
+  }, [onGridReadyProp, onGridStateChange])
+
   const SOURCES = ['NIH_REPORTER', 'USASPENDING', 'PCORI', 'CORDIS', 'UKRI', 'AHA', 'ADA']
   const AREAS = ['Metabolic / GLP-1', 'Diabetes', 'Cardiovascular', 'Adherence / Outcomes', 'Other']
   const STATUSES = ['ACTIVE', 'COMPLETED']
@@ -286,14 +310,16 @@ export default function FundingTable({ filters, onSelectTrial }) {
         >
           Filter
         </button>
-        <input
-          className="search-input"
-          type="text"
-          placeholder="Search grants…"
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          style={{ width: 200 }}
+
+        <FilterBar
+          conditions={conditions || []}
+          onAdd={onAddCondition}
+          onEdit={onEditCondition}
+          onRemove={onRemoveCondition}
+          onClear={onClearConditions}
+          filterFields={FUNDING_FILTER_FIELDS}
         />
+
         <span className="toolbar-sep" />
         <button className="btn-sm" onClick={onExport}>Export CSV</button>
         <span className="row-count">
@@ -434,6 +460,7 @@ export default function FundingTable({ filters, onSelectTrial }) {
             rowData={rowData}
             columnDefs={COLUMN_DEFS}
             defaultColDef={DEFAULT_COL_DEF}
+            onGridReady={handleGridReady}
             pagination
             paginationPageSize={100}
             enableCellTextSelection

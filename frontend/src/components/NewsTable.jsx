@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { AgGridReact } from 'ag-grid-react'
 import { getNews } from '../api'
 import FieldsPanel from './FieldsPanel'
+import FilterBar from './FilterBar'
+import { NEWS_FILTER_FIELDS } from '../utils/conditions'
 
 const STATUS_COLORS = {
   RECRUITING:             { background: '#dcfce7', color: '#166534' },
@@ -142,7 +144,16 @@ const DEFAULT_COL_DEF = {
   filter: true,
 }
 
-export default function NewsTable({ filters, filterOpen, onToggleFilter }) {
+export default function NewsTable({
+  filters,
+  conditions,
+  onAddCondition,
+  onEditCondition,
+  onRemoveCondition,
+  onClearConditions,
+  onGridReady: onGridReadyProp,
+  onGridStateChange,
+}) {
   const gridRef = useRef(null)
   const [rowData, setRowData] = useState([])
   const [loading, setLoading] = useState(false)
@@ -168,9 +179,21 @@ export default function NewsTable({ filters, filterOpen, onToggleFilter }) {
     fetchData()
   }, [fetchData])
 
+  const handleGridReady = useCallback((params) => {
+    onGridReadyProp?.(params.api)
+    const bump = () => onGridStateChange?.()
+    const events = [
+      'columnVisible', 'columnMoved', 'columnPinned', 'columnResized',
+      'sortChanged', 'filterChanged',
+    ]
+    events.forEach(ev => {
+      try { params.api.addEventListener(ev, bump) } catch {}
+    })
+  }, [onGridReadyProp, onGridStateChange])
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-      <div className="toolbar">
+      <div className="toolbar toolbar-with-filters">
         <button
           className={`btn-sm${fieldsOpen ? ' btn-active' : ''}`}
           onClick={() => setFieldsOpen(v => !v)}
@@ -178,13 +201,16 @@ export default function NewsTable({ filters, filterOpen, onToggleFilter }) {
         >
           Fields
         </button>
-        <button
-          className={`btn-sm${filterOpen ? ' btn-active' : ''}`}
-          onClick={onToggleFilter}
-          title="Toggle filter sidebar"
-        >
-          Filter
-        </button>
+
+        <FilterBar
+          conditions={conditions || []}
+          onAdd={onAddCondition}
+          onEdit={onEditCondition}
+          onRemove={onRemoveCondition}
+          onClear={onClearConditions}
+          filterFields={NEWS_FILTER_FIELDS}
+        />
+
         <span className="toolbar-sep" />
         <button className="btn-sm" onClick={() => gridRef.current?.api?.exportDataAsCsv()}>
           Export CSV
@@ -201,6 +227,7 @@ export default function NewsTable({ filters, filterOpen, onToggleFilter }) {
             rowData={rowData}
             columnDefs={COLUMN_DEFS}
             defaultColDef={DEFAULT_COL_DEF}
+            onGridReady={handleGridReady}
             pagination
             paginationPageSize={100}
             enableCellTextSelection

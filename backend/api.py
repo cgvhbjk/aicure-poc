@@ -215,6 +215,11 @@ def get_news(
     linked_only: Optional[bool] = None,
     is_trial_announcement: Optional[bool] = None,
     is_trial_results: Optional[bool] = None,
+    published_at_from: Optional[str] = None,
+    published_at_to: Optional[str] = None,
+    drug_mentioned: Optional[str] = None,
+    phase_mentioned: Optional[str] = None,
+    sponsor_mentioned: Optional[str] = None,
     page: int = 1,
     page_size: int = 100,
 ):
@@ -246,6 +251,26 @@ def get_news(
     if is_trial_results is not None:
         where_clauses.append("ni.is_trial_results = ?")
         params.append(1 if is_trial_results else 0)
+
+    if published_at_from:
+        where_clauses.append("ni.published_at >= ?")
+        params.append(published_at_from)
+
+    if published_at_to:
+        where_clauses.append("ni.published_at <= ?")
+        params.append(published_at_to)
+
+    if drug_mentioned:
+        where_clauses.append("LOWER(ni.drug_mentioned) LIKE ?")
+        params.append(f"%{drug_mentioned.lower()}%")
+
+    if phase_mentioned:
+        where_clauses.append("LOWER(ni.phase_mentioned) LIKE ?")
+        params.append(f"%{phase_mentioned.lower()}%")
+
+    if sponsor_mentioned:
+        where_clauses.append("LOWER(ni.sponsor_mentioned) LIKE ?")
+        params.append(f"%{sponsor_mentioned.lower()}%")
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -1209,6 +1234,7 @@ def get_grants(
     therapeutic_area: Optional[List[str]] = Query(default=None),
     status: Optional[List[str]] = Query(default=None),
     country: Optional[List[str]] = Query(default=None),
+    country_q: Optional[str] = None,
     has_trial_link: Optional[bool] = None,
     min_amount: Optional[int] = None,
     max_amount: Optional[int] = None,
@@ -1218,6 +1244,8 @@ def get_grants(
     agency_division: Optional[List[str]] = Query(default=None),
     fiscal_year_min: Optional[int] = None,
     fiscal_year_max: Optional[int] = None,
+    award_date_from: Optional[str] = None,
+    award_date_to: Optional[str] = None,
     page: int = 1,
     page_size: int = 100,
 ):
@@ -1294,6 +1322,18 @@ def get_grants(
     if fiscal_year_max is not None:
         where_clauses.append("fiscal_year <= ?")
         params.append(fiscal_year_max)
+
+    if country_q:
+        where_clauses.append("LOWER(country) LIKE ?")
+        params.append(f"%{country_q.lower()}%")
+
+    if award_date_from:
+        where_clauses.append("award_date >= ?")
+        params.append(award_date_from)
+
+    if award_date_to:
+        where_clauses.append("award_date <= ?")
+        params.append(award_date_to)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
