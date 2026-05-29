@@ -1,5 +1,43 @@
 import { v4 as uuidv4 } from 'uuid'
 
+const NEWS_SOURCES = [
+  'Fierce Pharma', 'Endpoints News', 'PharmaVoice',
+  'TrialSite News', 'BioPharma Dive', 'STAT News', 'BioSpace',
+  'Google News — GLP-1', 'Google News — Semaglutide', 'Google News — Tirzepatide',
+  'Google News — Obesity trial', 'Google News — Weight loss', 'Google News — T2D trial',
+  'Google News — Heart failure', 'Google News — A-fib trial',
+  'Google News — First patient', 'Google News — IND filing',
+]
+
+export const NEWS_FILTER_FIELDS = [
+  { key: 'q',                 label: 'Search',             type: 'text'    },
+  { key: 'source',            label: 'Source',             type: 'select',  options: NEWS_SOURCES },
+  { key: 'published_at',      label: 'Published Date',     type: 'date'    },
+  { key: 'drug_mentioned',    label: 'Drug Mentioned',     type: 'text'    },
+  { key: 'phase_mentioned',   label: 'Phase Mentioned',    type: 'text'    },
+  { key: 'sponsor_mentioned', label: 'Sponsor Mentioned',  type: 'text'    },
+  { key: 'linked_only',       label: 'Linked to Trial',    type: 'boolean', hint: 'Show only articles linked to a trial.' },
+  { key: 'is_announcement',   label: 'Trial Announcement', type: 'boolean', hint: 'Show only trial announcement articles (★).' },
+  { key: 'is_results',        label: 'Trial Results',      type: 'boolean', hint: 'Show only trial results/findings articles (●).' },
+]
+
+export const FUNDING_FILTER_FIELDS = [
+  { key: 'q',               label: 'Search',           type: 'text'    },
+  {
+    key: 'source', label: 'Source', type: 'select',
+    options: ['NIH_REPORTER', 'USASPENDING', 'PCORI', 'CORDIS', 'UKRI', 'AHA', 'ADA'],
+    displayFn: (v) => v.replace(/_/g, ' '),
+  },
+  { key: 'therapeutic_area', label: 'Therapeutic Area', type: 'select',
+    options: ['Metabolic / GLP-1', 'Diabetes', 'Cardiovascular', 'Adherence / Outcomes', 'Other'],
+  },
+  { key: 'status',    label: 'Status',      type: 'select',  options: ['ACTIVE', 'COMPLETED', 'UNKNOWN'] },
+  { key: 'country',   label: 'Country',     type: 'text'    },
+  { key: 'award_date',label: 'Award Date',  type: 'date'    },
+  { key: 'amount_usd',label: 'Amount (USD)',type: 'number'  },
+  { key: 'has_trial_link', label: 'Has Trial Link', type: 'boolean', hint: 'Show only grants linked to a trial.' },
+]
+
 export const FILTER_FIELDS = [
   {
     key: 'status', label: 'Status', type: 'select',
@@ -17,7 +55,7 @@ export const FILTER_FIELDS = [
     key: 'registry', label: 'Registry', type: 'select',
     options: ['ClinicalTrials.gov', 'CTIS', 'ISRCTN', 'CRIS', 'ANZCTR', 'DRKS', 'jRCT', 'NTR', 'ChiCTR', 'CTRI', 'IRCT', 'ReBec', 'PACTR'],
   },
-  { key: 'has_news', label: 'Has News', type: 'boolean' },
+  { key: 'has_news', label: 'Has News', type: 'boolean', hint: 'Filters to trials that have linked news articles.' },
   { key: 'enrollment', label: 'Enrollment', type: 'number' },
   { key: 'start_date', label: 'Start Date', type: 'date' },
   { key: 'primary_completion', label: 'Completion Date', type: 'date' },
@@ -51,11 +89,11 @@ export function makeCondition(field, operator, value) {
 //   "Start after 2024-01-01"
 //   "Has news"
 //   "Search: obesity"
-export function formatConditionLabel(condition) {
-  const fieldDef = FILTER_FIELDS.find(f => f.key === condition.field)
+export function formatConditionLabel(condition, fields = FILTER_FIELDS) {
+  const fieldDef = fields.find(f => f.key === condition.field)
   const fieldLabel = fieldDef?.label ?? condition.field
 
-  if (condition.field === 'has_news') return 'Has news'
+  if (fieldDef?.type === 'boolean') return fieldLabel
 
   if (fieldDef?.type === 'select') {
     const arr = Array.isArray(condition.value) ? condition.value : (condition.value != null ? [condition.value] : [])
@@ -73,6 +111,8 @@ export function formatConditionLabel(condition) {
     if (op === 'not_contains') return `${fieldLabel} ∌ ${v}`
     return `${fieldLabel}: ${v}`
   }
+
+  if (fieldDef?.type === 'boolean') return fieldLabel
 
   if (fieldDef?.type === 'number') {
     const ops = { gte: '≥', lte: '≤', gt: '>', lt: '<', eq: '=' }
@@ -161,6 +201,91 @@ export function compileConditions(conditions) {
   }
 
   return { apiParams, agGridFilters }
+}
+
+export function compileNewsConditions(conditions) {
+  const apiParams = {}
+  for (const c of conditions) {
+    const vals = Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []
+    switch (c.field) {
+      case 'q':
+        apiParams.q = Array.isArray(c.value) ? c.value[0] : c.value
+        break
+      case 'source':
+        if (c.operator === 'is' && vals.length) apiParams.source = [...(apiParams.source || []), ...vals]
+        break
+      case 'published_at':
+        if (c.operator === 'after')       apiParams.published_at_from = c.value
+        else if (c.operator === 'before') apiParams.published_at_to   = c.value
+        else if (c.operator === 'on')   { apiParams.published_at_from = c.value; apiParams.published_at_to = c.value }
+        break
+      case 'drug_mentioned':
+        apiParams.drug_mentioned = Array.isArray(c.value) ? c.value[0] : c.value
+        break
+      case 'phase_mentioned':
+        apiParams.phase_mentioned = Array.isArray(c.value) ? c.value[0] : c.value
+        break
+      case 'sponsor_mentioned':
+        apiParams.sponsor_mentioned = Array.isArray(c.value) ? c.value[0] : c.value
+        break
+      case 'linked_only':
+        apiParams.linked_only = true
+        break
+      case 'is_announcement':
+        apiParams.is_trial_announcement = true
+        break
+      case 'is_results':
+        apiParams.is_trial_results = true
+        break
+      default:
+        break
+    }
+  }
+  return { apiParams }
+}
+
+export function compileFundingConditions(conditions) {
+  const apiParams = {}
+  for (const c of conditions) {
+    const vals = Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []
+    switch (c.field) {
+      case 'q':
+        apiParams.q = Array.isArray(c.value) ? c.value[0] : c.value
+        break
+      case 'source':
+        if (c.operator === 'is' && vals.length) apiParams.source = [...(apiParams.source || []), ...vals]
+        break
+      case 'therapeutic_area':
+        if (c.operator === 'is' && vals.length) apiParams.therapeutic_area = [...(apiParams.therapeutic_area || []), ...vals]
+        break
+      case 'status':
+        if (c.operator === 'is' && vals.length) apiParams.status = [...(apiParams.status || []), ...vals]
+        break
+      case 'country':
+        apiParams.country_q = Array.isArray(c.value) ? c.value[0] : c.value
+        break
+      case 'award_date':
+        if (c.operator === 'after')       apiParams.award_date_from = c.value
+        else if (c.operator === 'before') apiParams.award_date_to   = c.value
+        else if (c.operator === 'on')   { apiParams.award_date_from = c.value; apiParams.award_date_to = c.value }
+        break
+      case 'amount_usd': {
+        const n = Number(c.value)
+        if (!isNaN(n)) {
+          if (c.operator === 'gte' || c.operator === 'gt') apiParams.min_amount = n
+          else if (c.operator === 'lte' || c.operator === 'lt') apiParams.max_amount = n
+          else if (c.operator === 'eq') { apiParams.min_amount = n; apiParams.max_amount = n }
+        }
+        break
+      }
+      case 'has_trial_link':
+        apiParams.has_trial_link = true
+        break
+      default:
+        break
+    }
+  }
+  return { apiParams }
 }
 
 // Stable fingerprint of conditions + grid state for "view is modified" detection.

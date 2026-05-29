@@ -8,7 +8,7 @@ import UploadModal from './components/UploadModal'
 import MergeAuditView from './components/MergeAuditView'
 import FundingTable from './components/FundingTable'
 import GrantDetailPanel from './components/GrantDetailPanel'
-import { compileConditions } from './utils/conditions'
+import { compileConditions, compileNewsConditions, compileFundingConditions } from './utils/conditions'
 import { getStats, getMergeStats, getGrantStats } from './api'
 import './App.css'
 
@@ -39,14 +39,6 @@ function CheckGroup({ label, options, selected, onToggle, labelFn }) {
   )
 }
 
-const SOURCES = [
-  'Fierce Pharma', 'Endpoints News', 'PharmaVoice',
-  'TrialSite News', 'BioPharma Dive', 'STAT News', 'BioSpace',
-  'Google News — GLP-1', 'Google News — Semaglutide', 'Google News — Tirzepatide',
-  'Google News — Obesity trial', 'Google News — Weight loss', 'Google News — T2D trial',
-  'Google News — Heart failure', 'Google News — A-fib trial',
-  'Google News — First patient', 'Google News — IND filing',
-]
 const ORG_TYPES = ['PHARMA', 'BIOTECH', 'CRO', 'DCT_VENDOR', 'DIGITAL_HEALTH', 'RPM', 'TELEHEALTH', 'ACADEMIC', 'GOVERNMENT', 'OTHER']
 
 export default function App() {
@@ -58,16 +50,16 @@ export default function App() {
   // Trial filters — Airtable-style conditions
   const [conditions, setConditions] = useState([])
 
-  // News filters
-  const [searchText, setSearchText] = useState('')
-  const [selectedSources, setSelectedSources] = useState([])
-  const [linkedOnly, setLinkedOnly] = useState(null)
-  const [announcementsOnly, setAnnouncementsOnly] = useState(false)
-  const [resultsOnly, setResultsOnly] = useState(false)
+  // News conditions (Airtable-style, replaces old checkbox state)
+  const [newsConditions, setNewsConditions] = useState([])
 
-  // Org filters
+  // Funding conditions
+  const [fundingConditions, setFundingConditions] = useState([])
+
+  // Org filters (still simple checkbox sidebar)
+  const [orgSearchText, setOrgSearchText] = useState('')
   const [selectedOrgTypes, setSelectedOrgTypes] = useState([])
-const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
+  const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
 
   // Trial selected from org context (opens a top-level DetailPanel)
   const [orgSelectedTrial, setOrgSelectedTrial] = useState(null)
@@ -79,19 +71,41 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
   // Grant stats
   const [grantStats, setGrantStats] = useState(null)
 
+  // Grid API refs
   const trialApiRef = useRef(null)
-  // Bumped whenever AG Grid column/sort/filter state mutates, so ViewsSidebar
-  // can react to changes that don't live in React state.
+  const newsApiRef = useRef(null)
+  const fundingApiRef = useRef(null)
+
+  // Grid state bump counters (trigger ViewsSidebar auto-save)
   const [gridStateBump, setGridStateBump] = useState(0)
   const bumpGridState = useCallback(() => setGridStateBump(v => v + 1), [])
-  const debouncedSearch = useDebounce(searchText, 400)
+  const [newsGridStateBump, setNewsGridStateBump] = useState(0)
+  const bumpNewsGridState = useCallback(() => setNewsGridStateBump(v => v + 1), [])
+  const [fundingGridStateBump, setFundingGridStateBump] = useState(0)
+  const bumpFundingGridState = useCallback(() => setFundingGridStateBump(v => v + 1), [])
 
-  // Condition handlers
+  const debouncedOrgSearch = useDebounce(orgSearchText, 400)
+
+  // Trials condition handlers
   const addCondition = useCallback((c) => setConditions(prev => [...prev, c]), [])
   const editCondition = useCallback((c) => setConditions(prev => prev.map(x => x.id === c.id ? c : x)), [])
   const removeCondition = useCallback((id) => setConditions(prev => prev.filter(x => x.id !== id)), [])
   const clearConditions = useCallback(() => setConditions([]), [])
   const getCurrentConditions = useCallback(() => conditions, [conditions])
+
+  // News condition handlers
+  const addNewsCondition = useCallback((c) => setNewsConditions(prev => [...prev, c]), [])
+  const editNewsCondition = useCallback((c) => setNewsConditions(prev => prev.map(x => x.id === c.id ? c : x)), [])
+  const removeNewsCondition = useCallback((id) => setNewsConditions(prev => prev.filter(x => x.id !== id)), [])
+  const clearNewsConditions = useCallback(() => setNewsConditions([]), [])
+  const getCurrentNewsConditions = useCallback(() => newsConditions, [newsConditions])
+
+  // Funding condition handlers
+  const addFundingCondition = useCallback((c) => setFundingConditions(prev => [...prev, c]), [])
+  const editFundingCondition = useCallback((c) => setFundingConditions(prev => prev.map(x => x.id === c.id ? c : x)), [])
+  const removeFundingCondition = useCallback((id) => setFundingConditions(prev => prev.filter(x => x.id !== id)), [])
+  const clearFundingConditions = useCallback(() => setFundingConditions([]), [])
+  const getCurrentFundingConditions = useCallback(() => fundingConditions, [fundingConditions])
 
   useEffect(() => {
     getStats().then((r) => setStats(r.data)).catch(console.error)
@@ -110,33 +124,30 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
     [conditions]
   )
 
-  const newsFilters = useMemo(
-    () => ({
-      q: debouncedSearch || undefined,
-      source: selectedSources.length ? selectedSources : undefined,
-      linked_only: linkedOnly,
-      is_trial_announcement: announcementsOnly || undefined,
-      is_trial_results: resultsOnly || undefined,
-    }),
-    [debouncedSearch, selectedSources, linkedOnly, announcementsOnly, resultsOnly]
+  const { apiParams: newsFilters } = useMemo(
+    () => compileNewsConditions(newsConditions),
+    [newsConditions]
+  )
+
+  const { apiParams: fundingFilters } = useMemo(
+    () => compileFundingConditions(fundingConditions),
+    [fundingConditions]
   )
 
   const orgFilters = useMemo(
     () => ({
-      q: debouncedSearch || undefined,
+      q: debouncedOrgSearch || undefined,
       org_type: selectedOrgTypes.length ? selectedOrgTypes : undefined,
       has_trials: orgHasTrialsOnly || undefined,
     }),
-    [debouncedSearch, selectedOrgTypes, orgHasTrialsOnly]
+    [debouncedOrgSearch, selectedOrgTypes, orgHasTrialsOnly]
   )
 
   const clearFilters = () => {
     setConditions([])
-    setSearchText('')
-    setSelectedSources([])
-    setLinkedOnly(null)
-    setAnnouncementsOnly(false)
-    setResultsOnly(false)
+    setNewsConditions([])
+    setFundingConditions([])
+    setOrgSearchText('')
     setSelectedOrgTypes([])
     setOrgHasTrialsOnly(false)
   }
@@ -147,6 +158,7 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
     && activeTab !== 'trials'
     && activeTab !== 'merges'
     && activeTab !== 'funding'
+    && activeTab !== 'news'
 
   return (
     <div className="app">
@@ -157,12 +169,6 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
             <span className="stat-pill">{stats.total_trials.toLocaleString()} trials</span>
             <span className="stat-pill accent">{stats.trials_with_news} with news</span>
             <span className="stat-pill">{stats.total_news} news items</span>
-            {stats.eu_ctis_count > 0 && (
-              <span className="stat-pill eu">CTIS {stats.eu_ctis_count}</span>
-            )}
-            {stats.eu_ctr_count > 0 && (
-              <span className="stat-pill eu">EU-CTR {stats.eu_ctr_count}</span>
-            )}
             {stats.last_ingested && (
               <span className="stat-pill muted">
                 Ingested {stats.last_ingested.slice(0, 10)}
@@ -172,11 +178,6 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
               <>
                 <span className="stat-pill">{grantStats.total_grants.toLocaleString()} grants</span>
                 <span className="stat-pill accent">{grantStats.active_grants} active</span>
-                {grantStats.active_funding_usd > 0 && (
-                  <span className="stat-pill" style={{ color: '#16a34a' }}>
-                    ${(grantStats.active_funding_usd / 1_000_000).toFixed(1)}M funded
-                  </span>
-                )}
               </>
             )}
           </div>
@@ -242,7 +243,7 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
       )}
 
       <div className="main-layout">
-        {/* Views sidebar — only for Trials tab */}
+        {/* Views sidebar — Trials, News, and Funding tabs */}
         {activeTab === 'trials' && (
           <ViewsSidebar
             tab="trials"
@@ -253,8 +254,29 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
             gridStateBump={gridStateBump}
           />
         )}
+        {activeTab === 'news' && (
+          <ViewsSidebar
+            tab="news"
+            gridApiRef={newsApiRef}
+            getCurrentConditions={getCurrentNewsConditions}
+            onApplyConditions={setNewsConditions}
+            conditions={newsConditions}
+            gridStateBump={newsGridStateBump}
+          />
+        )}
+        {activeTab === 'funding' && (
+          <ViewsSidebar
+            tab="funding"
+            gridApiRef={fundingApiRef}
+            getCurrentConditions={getCurrentFundingConditions}
+            onApplyConditions={setFundingConditions}
+            conditions={fundingConditions}
+            gridStateBump={fundingGridStateBump}
+          />
+        )}
 
         <div className="app-body">
+          {/* Orgs-only filter sidebar (news and funding moved to inline FilterBar) */}
           {showFilterSidebar && (
             <div className="filter-sidebar">
               <div className="filter-sidebar-inner">
@@ -264,52 +286,10 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
                     className="search-input"
                     type="text"
                     placeholder="Search…"
-                    value={searchText}
-                    onChange={(e) => setSearchText(e.target.value)}
+                    value={orgSearchText}
+                    onChange={(e) => setOrgSearchText(e.target.value)}
                   />
                 </div>
-
-                {activeTab === 'news' && (
-                  <>
-                    <CheckGroup
-                      label="Source"
-                      options={SOURCES}
-                      selected={selectedSources}
-                      onToggle={toggle(setSelectedSources)}
-                    />
-                    <div className="filter-group">
-                      <label className="checkbox-label">
-                        <input
-                          type="checkbox"
-                          checked={announcementsOnly}
-                          onChange={() => { setAnnouncementsOnly((v) => !v); setResultsOnly(false) }}
-                        />
-                        New trial announcements ★
-                      </label>
-                      <label className="checkbox-label">
-                        <input
-                          type="checkbox"
-                          checked={resultsOnly}
-                          onChange={() => { setResultsOnly((v) => !v); setAnnouncementsOnly(false) }}
-                        />
-                        Trial results / findings ●
-                      </label>
-                    </div>
-                    <div className="filter-group">
-                      <div className="filter-label">Linked status</div>
-                      {[['All', null], ['Linked', true], ['Unlinked', false]].map(([lbl, val]) => (
-                        <label key={lbl} className="checkbox-label">
-                          <input
-                            type="radio"
-                            checked={linkedOnly === val}
-                            onChange={() => setLinkedOnly(val)}
-                          />
-                          {lbl}
-                        </label>
-                      ))}
-                    </div>
-                  </>
-                )}
 
                 {activeTab === 'organizations' && activeOrgsSubTab === 'table' && (
                   <>
@@ -359,8 +339,13 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
             {activeTab === 'news' && (
               <NewsTable
                 filters={newsFilters}
-                filterOpen={filterOpen}
-                onToggleFilter={toggleFilter}
+                conditions={newsConditions}
+                onAddCondition={addNewsCondition}
+                onEditCondition={editNewsCondition}
+                onRemoveCondition={removeNewsCondition}
+                onClearConditions={clearNewsConditions}
+                onGridReady={(api) => { newsApiRef.current = api }}
+                onGridStateChange={bumpNewsGridState}
               />
             )}
             {activeTab === 'organizations' && activeOrgsSubTab === 'table' && (
@@ -372,7 +357,17 @@ const [orgHasTrialsOnly, setOrgHasTrialsOnly] = useState(false)
               />
             )}
             {activeTab === 'funding' && (
-              <FundingTable onSelectTrial={setOrgSelectedTrial} />
+              <FundingTable
+                filters={fundingFilters}
+                onSelectTrial={setOrgSelectedTrial}
+                conditions={fundingConditions}
+                onAddCondition={addFundingCondition}
+                onEditCondition={editFundingCondition}
+                onRemoveCondition={removeFundingCondition}
+                onClearConditions={clearFundingConditions}
+                onGridReady={(api) => { fundingApiRef.current = api }}
+                onGridStateChange={bumpFundingGridState}
+              />
             )}
             {activeTab === 'merges' && (
               <MergeAuditView />

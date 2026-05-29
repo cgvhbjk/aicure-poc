@@ -4,6 +4,8 @@ import { getTrials } from '../api'
 import DetailPanel from './DetailPanel'
 import FieldsPanel from './FieldsPanel'
 import FilterBar from './FilterBar'
+import ScoreConfigPanel from './ScoreConfigPanel'
+import { computeFitScore, loadScoreConfig } from '../utils/scoreConfig'
 
 // ── Cell renderers ────────────────────────────────────────────────────────────
 
@@ -189,8 +191,26 @@ function RegistryPillsCell({ value }) {
 
 const BASE = { sortable: true, resizable: true, filter: true }
 
+function FitScoreCell({ value }) {
+  if (value == null || value === '') return null
+  const color = value >= 70 ? '#16a34a' : value >= 40 ? '#d97706' : '#dc2626'
+  return <span style={{ fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
+}
+
 const COLUMN_DEFS = [
   { ...BASE, field: 'has_news',            headerName: '📰',                 width: 48,  hide: false, cellRenderer: NewsDot,       filter: false, resizable: false, maxWidth: 48 },
+  {
+    ...BASE,
+    field: 'aicure_fit',
+    headerName: 'Fit ★',
+    width: 72,
+    hide: false,
+    cellStyle: { textAlign: 'right' },
+    type: 'numericColumn',
+    valueGetter: ({ data }) => data ? computeFitScore(data, loadScoreConfig()) : null,
+    cellRenderer: FitScoreCell,
+    filter: false,
+  },
   { ...BASE, field: 'therapeutic_area',    headerName: 'Area',               width: 150, hide: false },
   { ...BASE, field: 'title_brief',         headerName: 'Trial Title',        width: 320, hide: false, tooltipField: 'brief_summary' },
   { ...BASE, field: 'status',              headerName: 'Status',             width: 140, hide: false, cellRenderer: StatusBadge },
@@ -265,6 +285,7 @@ export default function TrialsTable({
   const [total, setTotal] = useState(0)
   const [selectedTrial, setSelectedTrial] = useState(null)
   const [fieldsOpen, setFieldsOpen] = useState(false)
+  const [scoreConfigOpen, setScoreConfigOpen] = useState(false)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -328,6 +349,9 @@ export default function TrialsTable({
         />
 
         <span className="toolbar-sep" />
+        <button className="btn-sm" onClick={() => setScoreConfigOpen(true)} title="Configure fit score algorithm">
+          Score ⚙
+        </button>
         <button className="btn-sm" onClick={onExport}>Export CSV</button>
         <span className="row-count">
           {loading ? 'Loading…' : `${total.toLocaleString()} trials`}
@@ -363,6 +387,15 @@ export default function TrialsTable({
 
       {selectedTrial && (
         <DetailPanel trial={selectedTrial} onClose={() => setSelectedTrial(null)} />
+      )}
+
+      {scoreConfigOpen && (
+        <ScoreConfigPanel
+          onClose={() => setScoreConfigOpen(false)}
+          onConfigChange={() => {
+            try { gridRef.current?.api?.refreshCells({ force: true }) } catch {}
+          }}
+        />
       )}
     </div>
   )

@@ -1,8 +1,8 @@
 import React, { useState } from 'react'
-import { formatConditionLabel } from '../utils/conditions'
+import { FILTER_FIELDS, formatConditionLabel } from '../utils/conditions'
 import ConditionBuilder from './ConditionBuilder'
 
-export default function FilterBar({ conditions, onAdd, onEdit, onRemove, onClear, therapeuticAreas, countries }) {
+export default function FilterBar({ conditions, onAdd, onEdit, onRemove, onClear, therapeuticAreas, countries, filterFields = FILTER_FIELDS }) {
   const [builderOpen, setBuilderOpen] = useState(false)
   const [editingCondition, setEditingCondition] = useState(null)
 
@@ -41,6 +41,7 @@ export default function FilterBar({ conditions, onAdd, onEdit, onRemove, onClear
             onCancel={handleCancel}
             therapeuticAreas={therapeuticAreas}
             countries={countries}
+            filterFields={filterFields}
           />
         )}
       </div>
@@ -52,7 +53,7 @@ export default function FilterBar({ conditions, onAdd, onEdit, onRemove, onClear
           onClick={() => handlePillClick(c)}
           title="Click to edit"
         >
-          <span className="filter-pill-label">{formatConditionLabel(c)}</span>
+          <span className="filter-pill-label">{formatConditionLabel(c, filterFields)}</span>
           <button
             className="filter-pill-remove"
             onClick={(e) => { e.stopPropagation(); onRemove(c.id) }}
