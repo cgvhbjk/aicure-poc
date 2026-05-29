@@ -5,6 +5,7 @@ import GrantDetailPanel from './GrantDetailPanel'
 import FieldsPanel from './FieldsPanel'
 import FilterBar from './FilterBar'
 import { FUNDING_FILTER_FIELDS } from '../utils/conditions'
+import { computeGrantFitScore, loadGrantScoreConfig } from '../utils/scoreConfig'
 
 const _API_BASE = import.meta.env.PROD ? '' : 'http://localhost:8000'
 
@@ -136,12 +137,30 @@ function DateCell({ value }) {
   return <span>{String(value).slice(0, 10)}</span>
 }
 
+function FitScoreCell({ value }) {
+  if (value == null || value === '') return null
+  const color = value >= 70 ? '#16a34a' : value >= 40 ? '#d97706' : '#dc2626'
+  return <span style={{ fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
+}
+
 // ── Column definitions ────────────────────────────────────────────────────────
 
 const BASE = { sortable: true, resizable: true, filter: true }
 
 const COLUMN_DEFS = [
   { ...BASE, field: 'has_trial_link',   headerName: '🔗',                  width: 48,  hide: false, cellRenderer: TrialLinkDot,        filter: false, resizable: false, maxWidth: 48 },
+  {
+    ...BASE,
+    field: 'aicure_fit',
+    headerName: 'Fit ★',
+    width: 72,
+    hide: false,
+    cellStyle: { textAlign: 'right' },
+    type: 'numericColumn',
+    valueGetter: ({ data }) => data ? computeGrantFitScore(data, loadGrantScoreConfig()) : null,
+    cellRenderer: FitScoreCell,
+    filter: false,
+  },
   { ...BASE, field: 'source',           headerName: 'Source',               width: 130, hide: false, cellRenderer: SourceBadge },
   { ...BASE, field: 'therapeutic_area', headerName: 'Area',                 width: 150, hide: false },
   { ...BASE, field: 'title',            headerName: 'Grant Title',          width: 320, hide: false },

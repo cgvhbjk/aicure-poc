@@ -169,12 +169,6 @@ export default function App() {
             <span className="stat-pill">{stats.total_trials.toLocaleString()} trials</span>
             <span className="stat-pill accent">{stats.trials_with_news} with news</span>
             <span className="stat-pill">{stats.total_news} news items</span>
-            {stats.eu_ctis_count > 0 && (
-              <span className="stat-pill eu">CTIS {stats.eu_ctis_count}</span>
-            )}
-            {stats.eu_ctr_count > 0 && (
-              <span className="stat-pill eu">EU-CTR {stats.eu_ctr_count}</span>
-            )}
             {stats.last_ingested && (
               <span className="stat-pill muted">
                 Ingested {stats.last_ingested.slice(0, 10)}
@@ -184,11 +178,6 @@ export default function App() {
               <>
                 <span className="stat-pill">{grantStats.total_grants.toLocaleString()} grants</span>
                 <span className="stat-pill accent">{grantStats.active_grants} active</span>
-                {grantStats.active_funding_usd > 0 && (
-                  <span className="stat-pill" style={{ color: '#16a34a' }}>
-                    ${(grantStats.active_funding_usd / 1_000_000).toFixed(1)}M funded
-                  </span>
-                )}
               </>
             )}
           </div>

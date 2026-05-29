@@ -1045,7 +1045,9 @@ def get_stats():
     conn = get_connection()
 
     total_trials = conn.execute("SELECT COUNT(*) FROM trials").fetchone()[0]
-    trials_with_news = conn.execute("SELECT COUNT(*) FROM trials WHERE has_news = 1").fetchone()[0]
+    trials_with_news = conn.execute(
+        "SELECT COUNT(DISTINCT trial_id) FROM trial_news_links"
+    ).fetchone()[0]
     total_news = conn.execute("SELECT COUNT(*) FROM news_items").fetchone()[0]
     unlinked_news = conn.execute("SELECT COUNT(*) FROM news_items WHERE trial_id IS NULL").fetchone()[0]
     total_orgs = conn.execute("SELECT COUNT(*) FROM organizations").fetchone()[0]
@@ -1386,6 +1388,16 @@ def admin_refresh_news(x_admin_key: str = Header(default="")):
     thread = threading.Thread(target=run_daily_news, daemon=True)
     thread.start()
     return {"status": "started", "message": "News refresh running in background"}
+
+
+@app.post("/admin/prune-old")
+def admin_prune_old(dry_run: bool = False, x_admin_key: str = Header(default="")):
+    """Remove trials/grants with primary_completion/end_date > 1 year ago."""
+    if _ADMIN_KEY and x_admin_key != _ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from prune_old import prune_old
+    trial_count, grant_count = prune_old(dry_run=dry_run)
+    return {"trials_pruned": trial_count, "grants_pruned": grant_count, "dry_run": dry_run}
 
 
 # Serve the built React SPA from /frontend/dist for single-service deploys
