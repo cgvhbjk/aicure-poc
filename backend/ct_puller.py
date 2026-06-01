@@ -43,12 +43,18 @@ def classify_therapeutic_area(conditions_list, mesh_list, interventions_list):
     combined = " ".join(
         (conditions_list or []) + (mesh_list or []) + (interventions_list or [])
     ).lower()
-    if any(k in combined for k in ["obes", "glp", "weight", "semaglutide", "tirzepatide", "liraglutide"]):
+    if any(k in combined for k in ["obes", "glp", "weight", "semaglutide", "tirzepatide",
+                                    "liraglutide", "dulaglutide", "bariatric", "metaboli"]):
         return "Metabolic / GLP-1"
-    if "diabet" in combined:
+    if "diabet" in combined or "insulin" in combined or "glycem" in combined or "glycaem" in combined:
         return "Diabetes"
-    if any(k in combined for k in ["cardiac", "heart", "coronary", "atrial"]):
+    if any(k in combined for k in ["cardiac", "heart", "coronary", "atrial", "cardiovascular",
+                                    "hypertens", "blood pressure", "stroke", "arrhythm", "vascular"]):
         return "Cardiovascular"
+    if any(k in combined for k in ["nash", "nafld", "fatty liver", "hepatic", "steatohep"]):
+        return "Liver / NASH"
+    if any(k in combined for k in ["kidney", "renal", "nephro", "ckd"]):
+        return "Renal"
     return "Other"
 
 

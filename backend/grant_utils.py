@@ -43,15 +43,33 @@ def is_medical(text: str) -> bool:
     return any(k.lower() in t for k in MEDICAL_KEYWORDS)
 
 
+_ONCOLOGY_CUES = ["cancer", "tumor", "tumour", "oncolog", "carcinoma", "neoplas",
+                  "melanoma", "lymphoma", "leukemia", "leukaemia", "metasta", "glioma"]
+_STRONG_CM = ["semaglutide", "tirzepatide", "liraglutide", "dulaglutide", "glp-1",
+              "obesity", "obese", "diabet", "heart failure", "atrial fib"]
+
+
 def classify_area(text: str) -> str:
     t = (text or "").lower()
-    if any(k in t for k in ["obes", "glp", "weight", "semaglutide", "tirzepatide",
-                              "liraglutide", "dulaglutide"]):
+    # Oncology guard: cancer-metabolism / tumor grants were leaking into
+    # "Metabolic / GLP-1" via loose substrings (e.g. "metabolic"). If the text is
+    # clearly oncology and has no strong cardiometabolic anchor, it's off-focus.
+    if any(k in t for k in _ONCOLOGY_CUES) and not any(k in t for k in _STRONG_CM):
+        return "Other"
+    if any(k in t for k in ["obes", "glp", "weight loss", "weight management",
+                              "semaglutide", "tirzepatide", "liraglutide",
+                              "dulaglutide", "bariatric", "cardiometabolic",
+                              "metabolic syndrome"]):
         return "Metabolic / GLP-1"
-    if "diabet" in t:
+    if "diabet" in t or "insulin" in t or "glycem" in t or "glycaem" in t:
         return "Diabetes"
-    if any(k in t for k in ["cardiac", "heart", "coronary", "atrial", "cardiovascular"]):
+    if any(k in t for k in ["cardiac", "heart", "coronary", "atrial", "cardiovascular",
+                              "hypertens", "blood pressure", "stroke", "arrhythm", "vascular"]):
         return "Cardiovascular"
+    if any(k in t for k in ["nash", "nafld", "fatty liver", "hepatic", "steatohep"]):
+        return "Liver / NASH"
+    if any(k in t for k in ["kidney", "renal", "nephro", "ckd"]):
+        return "Renal"
     if "adher" in t or "compliance" in t:
         return "Adherence / Outcomes"
     return "Other"

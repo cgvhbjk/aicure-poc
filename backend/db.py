@@ -246,6 +246,7 @@ def _init_db():
     conn.commit()
     for alter in [
         "ALTER TABLE news_items ADD COLUMN is_trial_results INTEGER DEFAULT 0",
+        "ALTER TABLE news_items ADD COLUMN event_type TEXT DEFAULT 'non_relevant'",
         "ALTER TABLE trials ADD COLUMN euct_id TEXT",
         "ALTER TABLE trials ADD COLUMN eudract_number TEXT",
         "ALTER TABLE trials ADD COLUMN registry_sources TEXT DEFAULT '[\"ClinicalTrials.gov\"]'",

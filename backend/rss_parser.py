@@ -33,6 +33,17 @@ RSS_FEEDS = [
     {"source": "Google News — A-fib trial",    "url": _GN + "atrial+fibrillation+clinical+trial"},
     {"source": "Google News — First patient",  "url": _GN + "first+patient+enrolled+OR+dosed+pharma+trial"},
     {"source": "Google News — IND filing",     "url": _GN + "IND+filed+OR+IND+cleared+clinical+trial"},
+    # Broader net — more on-focus, early-stage cardiometabolic queries
+    {"source": "Google News — Obesity initiated",  "url": _GN + "obesity+trial+initiated+OR+planned+OR+launches"},
+    {"source": "Google News — Oral GLP-1",         "url": _GN + "oral+GLP-1+OR+orforglipron+OR+oral+semaglutide+trial"},
+    {"source": "Google News — Diabetes DCT",       "url": _GN + "diabetes+decentralized+OR+remote+clinical+trial"},
+    {"source": "Google News — Adherence trial",    "url": _GN + "medication+adherence+clinical+trial"},
+    {"source": "Google News — CV outcomes",        "url": _GN + "cardiovascular+outcomes+trial+enrolling+OR+initiated"},
+    {"source": "Google News — NASH trial",         "url": _GN + "NASH+OR+MASH+phase+2+OR+phase+3+trial"},
+    {"source": "Google News — Heart failure new",  "url": _GN + "heart+failure+trial+initiated+OR+enrolling+OR+planned"},
+    {"source": "Google News — Weight protocol",    "url": _GN + "weight+loss+trial+protocol+OR+study+design"},
+    {"source": "Google News — Obesity sponsor",    "url": _GN + "Novo+Nordisk+OR+Eli+Lilly+obesity+trial+phase"},
+    {"source": "Google News — Tirzepatide CV",     "url": _GN + "tirzepatide+OR+retatrutide+cardiovascular+OR+heart+trial"},
 ]
 
 NCT_PATTERN = re.compile(r"NCT\d{8}")
@@ -108,6 +119,90 @@ RESULTS_KEYWORDS = [
     "phase ii results", "phase iii results", "phase ii data", "phase iii data",
 ]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Event-type signal keywords
+# Early indicators of an upcoming/active trial often DON'T use standard
+# clinical-trial phrasing (protocol awards, site activations, manufacturing
+# scale-up, investigator announcements, budget notices, IRB activity, vendor
+# RFPs, hiring). We classify each item into a single event type rather than a
+# binary "mentions a trial" flag. Order in EVENT_TYPE_PRIORITY = precedence
+# when more than one type matches (strongest / nearest-term signal wins).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Recruitment is actively opening — strongest near-term signal
+RECRUITMENT_INITIATION_KEYWORDS = [
+    "first patient enrolled", "first patient dosed", "first patient treated",
+    "first-in-human", "first in human", "first in-human",
+    "doses first patient", "dosed first patient",
+    "enrollment opens", "enrollment begins", "enrollment open",
+    "open enrollment", "begin enrollment", "begin enrolling",
+    "enrolling patients", "enrolling participants", "enrolling now",
+    "now enrolling", "seeking patients", "seeking participants",
+    "recruiting patients", "recruiting participants",
+    "open for enrollment", "open to enrollment", "actively recruiting",
+]
+
+# Study is spinning up operationally (after planning, before/at recruitment)
+STUDY_STARTUP_KEYWORDS = [
+    "initiates phase", "initiate phase", "initiating phase",
+    "begins phase", "begin phase", "beginning phase",
+    "starts phase", "start phase", "launches phase", "launch phase",
+    "announces phase", "study initiation", "trial initiation", "trial launch",
+    "announces trial", "announces clinical trial", "study go-live",
+    "irb approval", "irb approved", "ethics approval", "ethics committee approval",
+    "manufacturing scale-up", "scale up manufacturing", "scaling manufacturing",
+    "manufacturing ramp", "clinical supply", "drug supply ready",
+    "study staff", "clinical trial manager", "study coordinator hiring",
+    "hiring clinical", "now hiring", "expanding clinical team",
+]
+
+# New investigative sites being activated / opened
+SITE_OPENING_KEYWORDS = [
+    "site activation", "sites activated", "activating sites", "site activated",
+    "new clinical site", "new trial site", "opening sites", "site opening",
+    "site initiation visit", "siv scheduled", "additional sites",
+    "expanding to sites", "investigator site", "clinical site opened",
+]
+
+# Protocol is being designed / planned; investigator engagement
+PROTOCOL_PLANNING_KEYWORDS = [
+    "protocol design", "protocol finalized", "protocol amendment",
+    "study protocol", "protocol development", "protocol awarded",
+    "protocol award", "investigator meeting", "principal investigator named",
+    "appoints principal investigator", "lead investigator", "study design",
+    "trial design unveiled", "plans phase", "planned phase", "planning a phase",
+    "intends to initiate", "expects to begin", "to begin a phase",
+]
+
+# Registry / regulatory filing activity
+REGISTRY_CHANGE_KEYWORDS = [
+    "clinicaltrials.gov", "nct registration", "registered on clinicaltrials",
+    "ind filed", "ind accepted", "ind cleared", "ind application",
+    "ind clearance", "investigational new drug", "cta submitted",
+    "cta approved", "clinical trial application", "euct", "eudract",
+    "registered the trial", "trial registered",
+]
+
+# Funding / budget signals (often precede everything above)
+FUNDING_AWARDED_KEYWORDS = [
+    "grant awarded", "awarded a grant", "receives grant", "grant funding",
+    "funding awarded", "secures funding", "raises", "series a", "series b",
+    "series c", "budget notice", "budget allocation", "nih award",
+    "awarded contract", "milestone payment", "funding round",
+    "research funding", "to fund the trial", "funds the study",
+    "nih grant", "research grant", "grant to study", "grant to fund",
+    "awarded funding", "grant recipient",
+]
+
+# Vendor / outsourcing demand signals (CRO/eClinical/DCT vendor selection)
+VENDOR_SIGNAL_KEYWORDS = [
+    "request for proposal", "rfp issued", "issues rfp", "vendor selection",
+    "selects cro", "cro selected", "contract research organization",
+    "ecoa vendor", "epro vendor", "selects vendor", "technology partner",
+    "partners with", "partnership to support", "selected to provide",
+    "decentralized trial platform", "dct platform", "evaluating vendors",
+]
+
 # Broad pharma terms used to filter out off-topic noise (applied per-source via require_relevance)
 _RELEVANCE_TERMS = [
     "clinical trial", "phase 1", "phase 2", "phase 3", "phase i", "phase ii", "phase iii",
@@ -136,6 +231,38 @@ def _is_relevant(text):
 def _flag(text, keywords):
     t = text.lower()
     return any(k in t for k in keywords)
+
+
+# Precedence: when an item matches multiple types, the earliest wins.
+# Ordered strongest/nearest-term first; results & noise handled separately.
+EVENT_TYPE_PRIORITY = [
+    ("recruitment_initiation", RECRUITMENT_INITIATION_KEYWORDS),
+    ("study_startup",          STUDY_STARTUP_KEYWORDS),
+    ("site_opening",           SITE_OPENING_KEYWORDS),
+    ("registry_change",        REGISTRY_CHANGE_KEYWORDS),
+    ("protocol_planning",      PROTOCOL_PLANNING_KEYWORDS),
+    ("vendor_signal",          VENDOR_SIGNAL_KEYWORDS),
+    ("funding_awarded",        FUNDING_AWARDED_KEYWORDS),
+]
+
+
+def classify_event_type(text, has_nct=False):
+    """Classify a news item into a single event type.
+
+    Returns one of: recruitment_initiation, study_startup, site_opening,
+    registry_change, protocol_planning, vendor_signal, funding_awarded,
+    trial_results, non_relevant.
+    Results reporting is checked last so an item describing readouts isn't
+    mislabeled as an upcoming-trial signal.
+    """
+    for event_type, keywords in EVENT_TYPE_PRIORITY:
+        if _flag(text, keywords):
+            return event_type
+    if has_nct:
+        return "registry_change"
+    if _flag(text, RESULTS_KEYWORDS):
+        return "trial_results"
+    return "non_relevant"
 
 
 def _parse_date(entry):
@@ -197,6 +324,10 @@ def parse_feed(feed_info):
         is_trial_announcement = 1 if (_is_initiation and not _is_results) else 0
         is_trial_results = 1 if _is_results else 0
 
+        # Granular event-type classification (supersedes the binary flags above
+        # for downstream scoring; flags retained for backward compatibility).
+        event_type = classify_event_type(combined, has_nct=bool(nct_ids))
+
         items.append({
             "source": source,
             "title": title,
@@ -210,6 +341,7 @@ def parse_feed(feed_info):
             "trial_id": None,
             "is_trial_announcement": is_trial_announcement,
             "is_trial_results": is_trial_results,
+            "event_type": event_type,
             "ingested_at": now,
         })
 
@@ -235,11 +367,11 @@ def parse_all_feeds():
                         INSERT OR IGNORE INTO news_items
                           (source, title, url, published_at, body_snippet,
                            sponsor_mentioned, drug_mentioned, phase_mentioned,
-                           nct_ids_found, trial_id, is_trial_announcement, is_trial_results, ingested_at)
+                           nct_ids_found, trial_id, is_trial_announcement, is_trial_results, event_type, ingested_at)
                         VALUES
                           (:source, :title, :url, :published_at, :body_snippet,
                            :sponsor_mentioned, :drug_mentioned, :phase_mentioned,
-                           :nct_ids_found, :trial_id, :is_trial_announcement, :is_trial_results, :ingested_at)
+                           :nct_ids_found, :trial_id, :is_trial_announcement, :is_trial_results, :event_type, :ingested_at)
                         """,
                         item,
                     )
