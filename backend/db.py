@@ -269,12 +269,26 @@ def _init_db():
         "ALTER TABLE grants ADD COLUMN fiscal_year INTEGER",
         "ALTER TABLE grants ADD COLUMN project_acronym TEXT",
         "ALTER TABLE grants ADD COLUMN research_type TEXT",
+        # Stable "first time we saw this grant" — set on insert, preserved on
+        # re-pull (see grant_utils.upsert_grant). ingested_at is re-stamped on
+        # every pull (INSERT OR REPLACE), so it can't mark "new this week";
+        # first_seen can. The weekly grants digest windows on it.
+        "ALTER TABLE grants ADD COLUMN first_seen TEXT",
     ]:
         try:
             conn.execute(alter)
             conn.commit()
         except Exception:
             pass
+    # Backfill first_seen for pre-existing rows (no-op once populated).
+    try:
+        conn.execute(
+            "UPDATE grants SET first_seen = ingested_at "
+            "WHERE first_seen IS NULL OR first_seen = ''"
+        )
+        conn.commit()
+    except Exception:
+        pass
     conn.close()
 
 

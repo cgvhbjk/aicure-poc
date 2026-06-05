@@ -110,11 +110,19 @@ def extract_interventions(text: str) -> str:
 def upsert_grant(record: dict):
     conn = get_connection()
     record = dict(record)
-    record["ingested_at"] = datetime.utcnow().isoformat()
-    cols = ", ".join(record.keys())
-    placeholders = ", ".join("?" * len(record))
+    now = datetime.utcnow().isoformat()
+    record["ingested_at"] = now
+    # first_seen is set once and preserved on re-pull (excluded from the UPDATE
+    # below), so the weekly digest can tell genuinely-new grants from re-pulled
+    # ones. INSERT OR REPLACE would reset it, so we use a targeted upsert.
+    record.setdefault("first_seen", now)
+    cols = list(record.keys())
+    collist = ", ".join(cols)
+    placeholders = ", ".join("?" * len(cols))
+    updates = ", ".join(f"{c}=excluded.{c}" for c in cols if c not in ("id", "first_seen"))
     conn.execute(
-        f"INSERT OR REPLACE INTO grants ({cols}) VALUES ({placeholders})",
+        f"INSERT INTO grants ({collist}) VALUES ({placeholders}) "
+        f"ON CONFLICT(id) DO UPDATE SET {updates}",
         list(record.values()),
     )
     conn.commit()

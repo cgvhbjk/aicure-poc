@@ -763,8 +763,14 @@ def build_news_digest(hours=24, max_items=10, fetch=False, pick_titles=None):
 
 
 def build_weekly_trials_digest(days=7, top_n=10):
-    """Top-N newly registered trials by opportunity score."""
-    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    """Top-N newly registered trials by opportunity score.
+
+    Windows on first_posted (the registry's own "first posted" date, ~96%
+    filled) rather than ingested_at. The pullers use INSERT OR REPLACE and
+    re-stamp ingested_at on every pull, so it marks "last pulled", not "newly
+    registered" — first_posted is the authoritative registration date.
+    """
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
     conn = get_connection()
     trials = conn.execute(
         """
@@ -773,10 +779,10 @@ def build_weekly_trials_digest(days=7, top_n=10):
                pi_name, pi_email, registry_sources, interventions, conditions,
                epro_ecoa, digital_biomarkers, dct_elements
         FROM trials
-        WHERE ingested_at >= ?
+        WHERE first_posted >= ?
           AND status NOT IN ('COMPLETED','TERMINATED','SUSPENDED','WITHDRAWN',
                              'NO_LONGER_AVAILABLE','APPROVED_FOR_MARKETING')
-        ORDER BY ingested_at DESC
+        ORDER BY first_posted DESC
         LIMIT 3000
         """,
         (cutoff,),
@@ -812,7 +818,14 @@ def build_weekly_trials_digest(days=7, top_n=10):
 
 
 def build_weekly_grants_digest(days=7, top_n=10):
-    """Top-N new grants by opportunity score (same scorer, source-aware)."""
+    """Top-N new grants by opportunity score (same scorer, source-aware).
+
+    Windows on first_seen (set once, preserved across re-pulls — see
+    grant_utils.upsert_grant) rather than the re-stamped ingested_at. Source
+    award/start dates are too sparse to filter on (award_date ~20% filled), so
+    "new" = first time we saw the grant. Falls back to ingested_at if a row
+    predates the first_seen backfill.
+    """
     cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
     conn = get_connection()
     grants = conn.execute(
@@ -821,7 +834,9 @@ def build_weekly_grants_digest(days=7, top_n=10):
                amount_usd, therapeutic_area, conditions, phase_mentioned,
                country, award_date, start_date, end_date, linked_trial_id,
                pi_name, pi_email, source
-        FROM grants WHERE ingested_at >= ? LIMIT 20000
+        FROM grants
+        WHERE COALESCE(NULLIF(first_seen, ''), ingested_at) >= ?
+        LIMIT 20000
         """,
         (cutoff,),
     ).fetchall()
