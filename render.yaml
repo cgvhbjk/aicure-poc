@@ -15,3 +15,22 @@ services:
     plan: free
     region: oregon
     dockerfilePath: ./Dockerfile
+    envVars:
+      # Secret: value is NOT in git. Enter it in the Render dashboard
+      # (Service → Environment). `sync: false` tells Render this blueprint
+      # only declares the var; the value is managed in the dashboard.
+      - key: RESEND_API_KEY
+        sync: false
+      # Verified Resend sender (root domain benjaminhelfand.com). Not secret,
+      # so the value is committed here for reproducibility.
+      - key: AICURE_EMAIL_FROM
+        value: "AiCure Digest <digest@benjaminhelfand.com>"
+      # Recipient list — operational choice, set per-environment in the
+      # dashboard (defaults to dufffires@gmail.com in code if unset).
+      - key: AICURE_EMAIL_TO
+        sync: false
+      # Secret: guards the /admin/* endpoints (incl. the digest trigger the
+      # daily-news workflow calls). MUST match the ADMIN_KEY GitHub secret.
+      # Without it set, the hardened endpoints fail closed (403).
+      - key: ADMIN_KEY
+        sync: false

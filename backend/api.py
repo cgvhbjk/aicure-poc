@@ -8,7 +8,7 @@ import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, Query, HTTPException, Header, UploadFile, File, Form
+from fastapi import FastAPI, Query, HTTPException, Header, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +24,18 @@ os.makedirs(_UPLOADS_DIR, exist_ok=True)
 
 _ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
 _news_refresh_lock = threading.Lock()
+
+
+def _require_admin(x_admin_key: str):
+    """Fail-closed admin guard: refuses requests when ADMIN_KEY env var is unset."""
+    if not _ADMIN_KEY or x_admin_key != _ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _like_pattern(s: str) -> str:
+    """Escape SQL LIKE wildcards in user input and wrap with %. Pair with ESCAPE '\\\\'."""
+    escaped = s.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def cleanup_old_news():
@@ -71,6 +83,19 @@ def run_daily_news():
         traceback.print_exc()
     finally:
         _news_refresh_lock.release()
+
+
+def run_daily_news_and_send(refresh: bool = True):
+    """Full daily news pipeline: optionally refresh RSS + relink, then build and
+    SEND the news digest. This is the piece the in-app scheduler was missing —
+    run_daily_news() only refreshes the DB and never emailed anything. Intended
+    to be driven by an external daily cron (see .github/workflows) so delivery
+    doesn't depend on the in-app scheduler, which can't fire while a free-tier
+    Render service is asleep. Returns the emailer status string."""
+    if refresh:
+        run_daily_news()
+    import emailer
+    return emailer.send_daily_news_digest()
 
 
 @asynccontextmanager
@@ -157,8 +182,10 @@ def get_trials(
         where_clauses.append("(" + " OR ".join(clauses) + ")")
 
     if has_news is not None:
-        where_clauses.append("has_news = ?")
-        params.append(1 if has_news else 0)
+        op = "IN" if has_news else "NOT IN"
+        where_clauses.append(
+            f"id {op} (SELECT trial_id FROM trial_news_links WHERE trial_id IS NOT NULL)"
+        )
 
     if has_euct_id is not None:
         where_clauses.append(
@@ -218,8 +245,11 @@ def get_news(
     published_at_from: Optional[str] = None,
     published_at_to: Optional[str] = None,
     drug_mentioned: Optional[str] = None,
+    drug_mentioned_not: Optional[str] = None,
     phase_mentioned: Optional[str] = None,
+    phase_mentioned_not: Optional[str] = None,
     sponsor_mentioned: Optional[str] = None,
+    sponsor_mentioned_not: Optional[str] = None,
     page: int = 1,
     page_size: int = 100,
 ):
@@ -253,24 +283,36 @@ def get_news(
         params.append(1 if is_trial_results else 0)
 
     if published_at_from:
-        where_clauses.append("ni.published_at >= ?")
+        where_clauses.append("DATE(ni.published_at) >= DATE(?)")
         params.append(published_at_from)
 
     if published_at_to:
-        where_clauses.append("ni.published_at <= ?")
+        where_clauses.append("DATE(ni.published_at) <= DATE(?)")
         params.append(published_at_to)
 
     if drug_mentioned:
-        where_clauses.append("LOWER(ni.drug_mentioned) LIKE ?")
-        params.append(f"%{drug_mentioned.lower()}%")
+        where_clauses.append("LOWER(ni.drug_mentioned) LIKE ? ESCAPE '\\'")
+        params.append(_like_pattern(drug_mentioned))
+
+    if drug_mentioned_not:
+        where_clauses.append("(ni.drug_mentioned IS NULL OR LOWER(ni.drug_mentioned) NOT LIKE ? ESCAPE '\\')")
+        params.append(_like_pattern(drug_mentioned_not))
 
     if phase_mentioned:
-        where_clauses.append("LOWER(ni.phase_mentioned) LIKE ?")
-        params.append(f"%{phase_mentioned.lower()}%")
+        where_clauses.append("LOWER(ni.phase_mentioned) LIKE ? ESCAPE '\\'")
+        params.append(_like_pattern(phase_mentioned))
+
+    if phase_mentioned_not:
+        where_clauses.append("(ni.phase_mentioned IS NULL OR LOWER(ni.phase_mentioned) NOT LIKE ? ESCAPE '\\')")
+        params.append(_like_pattern(phase_mentioned_not))
 
     if sponsor_mentioned:
-        where_clauses.append("LOWER(ni.sponsor_mentioned) LIKE ?")
-        params.append(f"%{sponsor_mentioned.lower()}%")
+        where_clauses.append("LOWER(ni.sponsor_mentioned) LIKE ? ESCAPE '\\'")
+        params.append(_like_pattern(sponsor_mentioned))
+
+    if sponsor_mentioned_not:
+        where_clauses.append("(ni.sponsor_mentioned IS NULL OR LOWER(ni.sponsor_mentioned) NOT LIKE ? ESCAPE '\\')")
+        params.append(_like_pattern(sponsor_mentioned_not))
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -1237,6 +1279,7 @@ def get_grants(
     status: Optional[List[str]] = Query(default=None),
     country: Optional[List[str]] = Query(default=None),
     country_q: Optional[str] = None,
+    country_q_not: Optional[str] = None,
     has_trial_link: Optional[bool] = None,
     min_amount: Optional[int] = None,
     max_amount: Optional[int] = None,
@@ -1326,15 +1369,19 @@ def get_grants(
         params.append(fiscal_year_max)
 
     if country_q:
-        where_clauses.append("LOWER(country) LIKE ?")
-        params.append(f"%{country_q.lower()}%")
+        where_clauses.append("LOWER(country) LIKE ? ESCAPE '\\'")
+        params.append(_like_pattern(country_q))
+
+    if country_q_not:
+        where_clauses.append("(country IS NULL OR LOWER(country) NOT LIKE ? ESCAPE '\\')")
+        params.append(_like_pattern(country_q_not))
 
     if award_date_from:
-        where_clauses.append("award_date >= ?")
+        where_clauses.append("DATE(award_date) >= DATE(?)")
         params.append(award_date_from)
 
     if award_date_to:
-        where_clauses.append("award_date <= ?")
+        where_clauses.append("DATE(award_date) <= DATE(?)")
         params.append(award_date_to)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
@@ -1380,8 +1427,7 @@ def get_grant(grant_id: str):
 @app.post("/admin/refresh-news")
 def admin_refresh_news(x_admin_key: str = Header(default="")):
     """Manually trigger a news refresh + cleanup. Protected by X-Admin-Key header."""
-    if _ADMIN_KEY and x_admin_key != _ADMIN_KEY:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    _require_admin(x_admin_key)
     if not _news_refresh_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Refresh already in progress")
     _news_refresh_lock.release()
@@ -1390,14 +1436,39 @@ def admin_refresh_news(x_admin_key: str = Header(default="")):
     return {"status": "started", "message": "News refresh running in background"}
 
 
+@app.post("/admin/send-news-digest")
+def admin_send_news_digest(refresh: bool = True, x_admin_key: str = Header(default="")):
+    """Refresh news (unless refresh=false) then build + SEND the daily news
+    digest. Protected by X-Admin-Key. Meant to be hit by an external daily cron
+    so delivery works even while the free-tier Render service is asleep (the
+    request wakes it). Runs synchronously and returns the emailer result so the
+    caller gets a real status (sent / skipped-empty / error)."""
+    _require_admin(x_admin_key)
+    try:
+        detail = run_daily_news_and_send(refresh=refresh)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"digest send failed: {e}")
+    return {"status": "ok", "detail": detail}
+
+
 @app.post("/admin/prune-old")
-def admin_prune_old(dry_run: bool = False, x_admin_key: str = Header(default="")):
-    """Remove trials/grants with primary_completion/end_date > 1 year ago."""
-    if _ADMIN_KEY and x_admin_key != _ADMIN_KEY:
-        raise HTTPException(status_code=403, detail="Forbidden")
+def admin_prune_old(
+    background_tasks: BackgroundTasks,
+    dry_run: bool = True,
+    cutoff_days: int = 365,
+    x_admin_key: str = Header(default=""),
+):
+    """Remove trials/grants with primary_completion/end_date older than cutoff_days.
+
+    Defaults to dry_run=True; pass dry_run=false to actually delete.
+    """
+    _require_admin(x_admin_key)
     from prune_old import prune_old
-    trial_count, grant_count = prune_old(dry_run=dry_run)
-    return {"trials_pruned": trial_count, "grants_pruned": grant_count, "dry_run": dry_run}
+    if dry_run:
+        trial_count, grant_count = prune_old(dry_run=True, cutoff_days=cutoff_days)
+        return {"trials_pruned": trial_count, "grants_pruned": grant_count, "dry_run": True}
+    background_tasks.add_task(prune_old, dry_run=False, cutoff_days=cutoff_days)
+    return {"status": "started", "message": "Prune running in background", "dry_run": False}
 
 
 # Serve the built React SPA from /frontend/dist for single-service deploys

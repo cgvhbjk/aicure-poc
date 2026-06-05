@@ -1,17 +1,39 @@
-name: Daily news refresh
+name: Daily news digest
 
+# Drives the daily news digest from OUTSIDE the app, because the in-app
+# APScheduler can't fire while the free-tier Render service is asleep. This
+# request wakes the service, refreshes news, builds the digest, and emails it.
 on:
   schedule:
-    - cron: '0 6 * * *'  # 06:00 UTC daily
-  workflow_dispatch:      # allow manual trigger from GitHub UI
+    - cron: '0 6 * * *'   # 06:00 UTC daily
+  workflow_dispatch:        # manual "Run workflow" button
+    inputs:
+      refresh:
+        description: "Refresh RSS before sending"
+        type: boolean
+        default: true
 
 jobs:
-  refresh:
+  digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Wake service and trigger news refresh
+      - name: Wake service, refresh news, send digest
+        env:
+          BASE_URL: ${{ vars.RENDER_SERVICE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+          REFRESH: ${{ github.event.inputs.refresh || 'true' }}
         run: |
-          curl -sf --retry 3 --retry-delay 30 \
-            -X POST \
-            https://aicure-poc.onrender.com/admin/refresh-news
+          if [ -z "$BASE_URL" ]; then echo "::error::RENDER_SERVICE_URL repo variable not set"; exit 1; fi
+          if [ -z "$ADMIN_KEY" ]; then echo "::error::ADMIN_KEY secret not set"; exit 1; fi
+          url="$BASE_URL/admin/send-news-digest?refresh=$REFRESH"
+          echo "POST $url"
+          # --retry-all-errors + --retry-connrefused ride out Render cold-start
+          # (502/connection-refused while the service boots). --max-time caps
+          # each attempt; the endpoint runs refresh+send synchronously.
+          code=$(curl -sS -o resp.txt -w '%{http_code}' \
+            --max-time 300 --retry 4 --retry-all-errors --retry-connrefused --retry-delay 30 \
+            -X POST "$url" -H "X-Admin-Key: $ADMIN_KEY")
+          echo "HTTP $code"
+          echo "--- response ---"; cat resp.txt 2>/dev/null; echo
+          [ "$code" = "200" ] || { echo "::error::digest endpoint returned HTTP $code"; exit 1; }
