@@ -117,14 +117,17 @@ def pull_all_isrctn():
     conn = get_connection()
     seen_ids = set()
 
+    PAGE_SIZE = 100
+    MAX_PAGES = 100  # hard cap so an API that ignores `page` can't loop forever
+
     try:
         for term in SEARCH_TERMS:
             page = 1
-            while True:
+            while page <= MAX_PAGES:
                 try:
                     resp = session.get(
                         API_URL,
-                        params={"q": term, "page": page, "pageSize": 10},
+                        params={"q": term, "page": page, "pageSize": PAGE_SIZE},
                         timeout=30,
                     )
                     resp.raise_for_status()
@@ -146,6 +149,7 @@ def pull_all_isrctn():
                 if not trials:
                     break
 
+                new_this_page = 0
                 for trial_el in trials:
                     result = _process_trial(trial_el)
                     if result is None:
@@ -154,6 +158,7 @@ def pull_all_isrctn():
                     if isrctn_id in seen_ids:
                         continue
                     seen_ids.add(isrctn_id)
+                    new_this_page += 1
                     try:
                         merge_or_insert(record, "ISRCTN", isrctn_id,
                                         "isrctn_id", conn=conn)
@@ -162,10 +167,15 @@ def pull_all_isrctn():
 
                 conn.commit()
 
-                if len(trials) < 10:
+                # Stop on a short (last) page, or when a full page adds no new
+                # records — the latter means the API is repeating results
+                # (ignoring `page`), which previously caused an infinite loop.
+                if len(trials) < PAGE_SIZE or new_this_page == 0:
                     break
                 page += 1
                 time.sleep(0.4)
+            else:
+                print(f"  [WARN] ISRCTN hit page cap ({MAX_PAGES}) for term={term!r}")
 
             time.sleep(0.5)
     finally:
