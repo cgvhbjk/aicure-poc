@@ -54,12 +54,15 @@ jobs:
           pip install -r backend/requirements.txt
           python -m playwright install --with-deps chromium
 
-      - name: Ingest trials + grants
+      - name: Ingest trials + grants, then prune stale (1yr retention)
         if: ${{ github.event.inputs.skip_ingest != 'true' }}
         working-directory: backend
         run: |
           python reingest_registries.py
           python reingest_grants.py --force
+          # Re-ingest re-fetches long-finished trials/grants; drop them so they
+          # don't show up as "new" (first_seen=now) in the digest.
+          python prune_old.py
 
       - name: Build & send weekly trials + grants digests
         working-directory: backend

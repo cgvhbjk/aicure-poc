@@ -827,6 +827,11 @@ def build_weekly_grants_digest(days=7, top_n=10):
     predates the first_seen backfill.
     """
     cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    # Exclude grants that already ended >1yr ago — same rule prune_old uses to
+    # delete them. A re-ingest re-fetches lots of long-finished awards and
+    # stamps first_seen=now, which would otherwise flood the digest with stale
+    # "new" grants. Grants with no end_date are kept (can't be shown as old).
+    end_cutoff = (datetime.utcnow() - timedelta(days=365)).strftime("%Y-%m-%d")
     conn = get_connection()
     grants = conn.execute(
         """
@@ -836,9 +841,10 @@ def build_weekly_grants_digest(days=7, top_n=10):
                pi_name, pi_email, source
         FROM grants
         WHERE COALESCE(NULLIF(first_seen, ''), ingested_at) >= ?
+          AND (end_date IS NULL OR end_date = '' OR end_date >= ?)
         LIMIT 20000
         """,
-        (cutoff,),
+        (cutoff, end_cutoff),
     ).fetchall()
     conn.close()
 
