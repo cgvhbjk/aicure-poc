@@ -1,0 +1,32 @@
+name: Weekly trials & grants digest
+
+# Sends the weekly trials + grants digests (two emails) by hitting the Render
+# app, same pattern as the daily news digest. The SEND is light (keyword
+# scoring, no scrape), so it runs fine on free-tier Render. Keeping the
+# trials/grants DATA fresh is a separate concern — see notes in the repo; the
+# pullers are too heavy/memory-hungry to run inside the free Render instance.
+on:
+  schedule:
+    - cron: '0 7 * * 1'   # Mondays 07:00 UTC (offset from the 06:00 daily news)
+  workflow_dispatch:        # manual "Run workflow" button
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wake service, send weekly trials + grants digests
+        env:
+          BASE_URL: ${{ vars.RENDER_SERVICE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          [ -n "$BASE_URL" ] || { echo "::error::RENDER_SERVICE_URL repo variable not set"; exit 1; }
+          [ -n "$ADMIN_KEY" ] || { echo "::error::ADMIN_KEY secret not set"; exit 1; }
+          url="$BASE_URL/admin/send-weekly-digest"
+          echo "POST $url"
+          code=$(curl -sS -o resp.txt -w '%{http_code}' \
+            --max-time 300 --retry 4 --retry-all-errors --retry-connrefused --retry-delay 30 \
+            -X POST "$url" -H "X-Admin-Key: $ADMIN_KEY")
+          echo "HTTP $code"
+          echo "--- response ---"; cat resp.txt 2>/dev/null; echo
+          [ "$code" = "200" ] || { echo "::error::weekly digest endpoint returned HTTP $code"; exit 1; }

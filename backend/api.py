@@ -1451,6 +1451,23 @@ def admin_send_news_digest(refresh: bool = True, x_admin_key: str = Header(defau
     return {"status": "ok", "detail": detail}
 
 
+@app.post("/admin/send-weekly-digest")
+def admin_send_weekly_digest(x_admin_key: str = Header(default="")):
+    """Build + SEND the weekly trials and grants digests (two emails) from the
+    CURRENT DB. Read-only keyword scoring, no ingest — so it's light enough to
+    run on free-tier Render. Driven by the weekly GitHub Actions cron. Note:
+    content freshness is bounded by how recently the DB was ingested/deployed;
+    this endpoint does not scrape (see the ingest discussion in the PR)."""
+    _require_admin(x_admin_key)
+    import emailer
+    try:
+        trials = emailer.send_weekly_trials_digest()
+        grants = emailer.send_weekly_grants_digest()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"weekly digest send failed: {e}")
+    return {"status": "ok", "trials": trials, "grants": grants}
+
+
 @app.post("/admin/prune-old")
 def admin_prune_old(
     background_tasks: BackgroundTasks,
