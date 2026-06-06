@@ -4,6 +4,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import re
+import csv
+import io
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -12,6 +14,7 @@ from fastapi import FastAPI, Query, HTTPException, Header, UploadFile, File, For
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 from typing import Optional, List
 from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -1287,6 +1290,73 @@ def get_grants_filter_options():
     }
 
 
+def _grants_where(q, source, therapeutic_area, status, country, country_q,
+                  country_q_not, has_trial_link, min_amount, max_amount,
+                  activity_code, org_type, research_type, agency_division,
+                  fiscal_year_min, fiscal_year_max, award_date_from, award_date_to):
+    """Build the shared WHERE clause for the grants list + export endpoints."""
+    where_clauses, params = [], []
+
+    if q:
+        where_clauses.append(
+            "(LOWER(title) LIKE ? OR LOWER(abstract) LIKE ? "
+            "OR LOWER(organization) LIKE ? OR LOWER(pi_name) LIKE ?)"
+        )
+        q_like = f"%{q.lower()}%"
+        params.extend([q_like, q_like, q_like, q_like])
+
+    for col, vals in (
+        ("source", source), ("therapeutic_area", therapeutic_area),
+        ("status", status), ("country", country), ("activity_code", activity_code),
+        ("org_type", org_type), ("research_type", research_type),
+        ("agency_division", agency_division),
+    ):
+        if vals:
+            placeholders = ",".join("?" * len(vals))
+            where_clauses.append(f"{col} IN ({placeholders})")
+            params.extend(vals)
+
+    if has_trial_link is not None:
+        where_clauses.append("has_trial_link = ?")
+        params.append(1 if has_trial_link else 0)
+    if min_amount is not None:
+        where_clauses.append("amount_usd >= ?")
+        params.append(min_amount)
+    if max_amount is not None:
+        where_clauses.append("amount_usd <= ?")
+        params.append(max_amount)
+    if fiscal_year_min is not None:
+        where_clauses.append("fiscal_year >= ?")
+        params.append(fiscal_year_min)
+    if fiscal_year_max is not None:
+        where_clauses.append("fiscal_year <= ?")
+        params.append(fiscal_year_max)
+    if country_q:
+        where_clauses.append("LOWER(country) LIKE ? ESCAPE '\\'")
+        params.append(_like_pattern(country_q))
+    if country_q_not:
+        where_clauses.append("(country IS NULL OR LOWER(country) NOT LIKE ? ESCAPE '\\')")
+        params.append(_like_pattern(country_q_not))
+    if award_date_from:
+        where_clauses.append("DATE(award_date) >= DATE(?)")
+        params.append(award_date_from)
+    if award_date_to:
+        where_clauses.append("DATE(award_date) <= DATE(?)")
+        params.append(award_date_to)
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    return where_sql, params
+
+
+def _grants_order_by(sort, sort_dir):
+    """ORDER BY clause for grants. aicure_fit is a real (precomputed) column, so
+    the default fit ranking sorts in SQL like any other; unknown columns fall
+    back to it."""
+    col = sort if (sort in GRANT_SORTABLE_COLUMNS or sort == "aicure_fit") else "aicure_fit"
+    direction = "ASC" if (sort_dir or "desc").lower() == "asc" else "DESC"
+    return f"ORDER BY {col} {direction} NULLS LAST, ingested_at DESC"
+
+
 @app.get("/grants")
 def get_grants(
     q: Optional[str] = None,
@@ -1315,94 +1385,11 @@ def get_grants(
     page_size = min(page_size, 100000)
     conn = get_connection()
 
-    where_clauses = []
-    params = []
-
-    if q:
-        where_clauses.append(
-            "(LOWER(title) LIKE ? OR LOWER(abstract) LIKE ? "
-            "OR LOWER(organization) LIKE ? OR LOWER(pi_name) LIKE ?)"
-        )
-        q_like = f"%{q.lower()}%"
-        params.extend([q_like, q_like, q_like, q_like])
-
-    if source:
-        placeholders = ",".join("?" * len(source))
-        where_clauses.append(f"source IN ({placeholders})")
-        params.extend(source)
-
-    if therapeutic_area:
-        placeholders = ",".join("?" * len(therapeutic_area))
-        where_clauses.append(f"therapeutic_area IN ({placeholders})")
-        params.extend(therapeutic_area)
-
-    if status:
-        placeholders = ",".join("?" * len(status))
-        where_clauses.append(f"status IN ({placeholders})")
-        params.extend(status)
-
-    if country:
-        placeholders = ",".join("?" * len(country))
-        where_clauses.append(f"country IN ({placeholders})")
-        params.extend(country)
-
-    if has_trial_link is not None:
-        where_clauses.append("has_trial_link = ?")
-        params.append(1 if has_trial_link else 0)
-
-    if min_amount is not None:
-        where_clauses.append("amount_usd >= ?")
-        params.append(min_amount)
-
-    if max_amount is not None:
-        where_clauses.append("amount_usd <= ?")
-        params.append(max_amount)
-
-    if activity_code:
-        placeholders = ",".join("?" * len(activity_code))
-        where_clauses.append(f"activity_code IN ({placeholders})")
-        params.extend(activity_code)
-
-    if org_type:
-        placeholders = ",".join("?" * len(org_type))
-        where_clauses.append(f"org_type IN ({placeholders})")
-        params.extend(org_type)
-
-    if research_type:
-        placeholders = ",".join("?" * len(research_type))
-        where_clauses.append(f"research_type IN ({placeholders})")
-        params.extend(research_type)
-
-    if agency_division:
-        placeholders = ",".join("?" * len(agency_division))
-        where_clauses.append(f"agency_division IN ({placeholders})")
-        params.extend(agency_division)
-
-    if fiscal_year_min is not None:
-        where_clauses.append("fiscal_year >= ?")
-        params.append(fiscal_year_min)
-
-    if fiscal_year_max is not None:
-        where_clauses.append("fiscal_year <= ?")
-        params.append(fiscal_year_max)
-
-    if country_q:
-        where_clauses.append("LOWER(country) LIKE ? ESCAPE '\\'")
-        params.append(_like_pattern(country_q))
-
-    if country_q_not:
-        where_clauses.append("(country IS NULL OR LOWER(country) NOT LIKE ? ESCAPE '\\')")
-        params.append(_like_pattern(country_q_not))
-
-    if award_date_from:
-        where_clauses.append("DATE(award_date) >= DATE(?)")
-        params.append(award_date_from)
-
-    if award_date_to:
-        where_clauses.append("DATE(award_date) <= DATE(?)")
-        params.append(award_date_to)
-
-    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    where_sql, params = _grants_where(
+        q, source, therapeutic_area, status, country, country_q, country_q_not,
+        has_trial_link, min_amount, max_amount, activity_code, org_type,
+        research_type, agency_division, fiscal_year_min, fiscal_year_max,
+        award_date_from, award_date_to)
 
     total = conn.execute(f"SELECT COUNT(*) FROM grants {where_sql}", params).fetchone()[0]
     total_funding = conn.execute(
@@ -1412,11 +1399,9 @@ def get_grants(
 
     # aicure_fit is precomputed (score_backfill.py) into a real column, so the
     # default fit ranking paginates server-side like any other sort.
-    col = sort if (sort in GRANT_SORTABLE_COLUMNS or sort == "aicure_fit") else "aicure_fit"
-    direction = "ASC" if (sort_dir or "desc").lower() == "asc" else "DESC"
     rows = conn.execute(
-        f"SELECT * FROM grants {where_sql} "
-        f"ORDER BY {col} {direction} NULLS LAST, ingested_at DESC LIMIT ? OFFSET ?",
+        f"SELECT * FROM grants {where_sql} {_grants_order_by(sort, sort_dir)} "
+        f"LIMIT ? OFFSET ?",
         params + [page_size, offset],
     ).fetchall()
 
@@ -1427,6 +1412,86 @@ def get_grants(
         if g.get("aicure_fit") is None:
             g["aicure_fit"] = score_grant(g)
     return {"total": total, "total_funding": total_funding, "page": page, "results": results}
+
+
+# (field, CSV header) — mirrors the Funding grid, score first.
+_GRANT_EXPORT_COLUMNS = [
+    ("aicure_fit", "Fit"), ("source", "Source"), ("therapeutic_area", "Area"),
+    ("title", "Grant Title"), ("status", "Status"), ("sponsor_funder", "Funder"),
+    ("agency_division", "Division / Programme"), ("activity_code", "Award Type"),
+    ("organization", "Recipient"), ("org_type", "Org Type"), ("pi_name", "PI"),
+    ("pi_email", "PI Email"), ("amount_usd", "Amount (USD)"), ("currency", "Currency"),
+    ("amount_original", "Original Amount"), ("country", "Country"),
+    ("award_date", "Awarded"), ("start_date", "Start"), ("end_date", "End"),
+    ("fiscal_year", "Fiscal Year"), ("linked_trial_id", "Linked Trial"),
+    ("award_id", "Award ID"), ("source_url", "Source URL"),
+]
+
+
+# Declared before /grants/{grant_id} so "export" isn't captured as a grant id.
+@app.get("/grants/export")
+def export_grants(
+    q: Optional[str] = None,
+    source: Optional[List[str]] = Query(default=None),
+    therapeutic_area: Optional[List[str]] = Query(default=None),
+    status: Optional[List[str]] = Query(default=None),
+    country: Optional[List[str]] = Query(default=None),
+    country_q: Optional[str] = None,
+    country_q_not: Optional[str] = None,
+    has_trial_link: Optional[bool] = None,
+    min_amount: Optional[int] = None,
+    max_amount: Optional[int] = None,
+    activity_code: Optional[List[str]] = Query(default=None),
+    org_type: Optional[List[str]] = Query(default=None),
+    research_type: Optional[List[str]] = Query(default=None),
+    agency_division: Optional[List[str]] = Query(default=None),
+    fiscal_year_min: Optional[int] = None,
+    fiscal_year_max: Optional[int] = None,
+    award_date_from: Optional[str] = None,
+    award_date_to: Optional[str] = None,
+    sort: Optional[str] = "aicure_fit",
+    sort_dir: str = Query("desc", alias="dir"),
+):
+    """Stream the FULL filtered grant set as CSV (honors the grid's filters +
+    sort). Unlike the client-side export, this covers every matching row, not
+    just the pages currently loaded into the infinite-scroll grid."""
+    where_sql, params = _grants_where(
+        q, source, therapeutic_area, status, country, country_q, country_q_not,
+        has_trial_link, min_amount, max_amount, activity_code, org_type,
+        research_type, agency_division, fiscal_year_min, fiscal_year_max,
+        award_date_from, award_date_to)
+
+    def rows_iter():
+        conn = get_connection()
+        try:
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+
+            def flush():
+                data = buf.getvalue()
+                buf.seek(0); buf.truncate(0)
+                return data
+
+            writer.writerow([h for _, h in _GRANT_EXPORT_COLUMNS])
+            yield flush()
+            for r in conn.execute(
+                f"SELECT * FROM grants {where_sql} {_grants_order_by(sort, sort_dir)}",
+                params,
+            ):
+                g = row_to_dict(r)
+                if g.get("aicure_fit") is None:
+                    g["aicure_fit"] = score_grant(g)
+                writer.writerow([g.get(field) for field, _ in _GRANT_EXPORT_COLUMNS])
+                yield flush()
+        finally:
+            conn.close()
+
+    filename = f"grants_export_{datetime.utcnow():%Y%m%d}.csv"
+    return StreamingResponse(
+        rows_iter(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/grants/{grant_id}/trials")

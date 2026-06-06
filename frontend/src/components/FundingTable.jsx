@@ -300,7 +300,25 @@ export default function FundingTable({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [JSON.stringify(apiFilters)])
 
-  const onExport = () => gridRef.current?.api?.exportDataAsCsv()
+  // Export the FULL filtered set via the backend (the infinite row model only
+  // holds the loaded pages client-side, so api.exportDataAsCsv would miss rows).
+  const onExport = () => {
+    const sp = new URLSearchParams()
+    Object.entries(apiFilters).forEach(([k, v]) => {
+      if (v === undefined || v === null) return
+      if (Array.isArray(v)) v.forEach((val) => sp.append(k, val))
+      else sp.append(k, v)
+    })
+    const sorted = (gridRef.current?.api?.getColumnState?.() || []).find((c) => c.sort)
+    sp.append('sort', sorted ? sorted.colId : 'aicure_fit')
+    sp.append('dir', sorted ? sorted.sort : 'desc')
+    const a = document.createElement('a')
+    a.href = `${_API_BASE}/grants/export?${sp.toString()}`
+    a.download = ''
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  }
   const onRowClicked = (e) => setSelectedGrant(e.data)
 
   const handleGridReady = useCallback((params) => {
