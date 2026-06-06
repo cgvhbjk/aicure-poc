@@ -5,8 +5,11 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "aicu
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+def get_connection(check_same_thread=True):
+    # check_same_thread=False is needed for the streaming CSV export, whose
+    # generator is iterated across anyio worker threads by Starlette; only one
+    # thread touches the connection at a time, so this stays safe.
+    conn = sqlite3.connect(DB_PATH, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     return conn
 

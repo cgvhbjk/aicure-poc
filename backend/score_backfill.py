@@ -13,9 +13,20 @@ from db import get_connection
 from scoring import score_grant, score_trial
 
 
+def _score_one(scorer, row):
+    """Score a single row, isolating failures so one malformed row can't abort
+    the whole pass. A row we can't score gets 0 (sorts low) rather than NULL,
+    so the grid never strands a stale/un-backfilled score."""
+    try:
+        return scorer(dict(row))
+    except Exception as e:
+        print(f"[score_backfill] could not score row {row['id']}: {e}")
+        return 0
+
+
 def _backfill_table(conn, table, scorer):
     rows = conn.execute(f"SELECT * FROM {table}").fetchall()
-    updates = [(scorer(dict(r)), r["id"]) for r in rows]
+    updates = [(_score_one(scorer, r), r["id"]) for r in rows]
     conn.executemany(
         f"UPDATE {table} SET aicure_fit = ? WHERE id = ?", updates
     )

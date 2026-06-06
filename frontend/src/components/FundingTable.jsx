@@ -7,7 +7,19 @@ import FilterBar from './FilterBar'
 import { FUNDING_FILTER_FIELDS } from '../utils/conditions'
 import { attachGridStateListeners } from '../utils/gridEvents'
 
-const _API_BASE = import.meta.env.PROD ? '' : 'http://localhost:8000'
+// Mirror api.js: VITE_API_URL override wins, else same-origin in prod / the dev
+// backend. Used for the direct-link export + filter-options fetch below.
+const _API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '' : 'http://localhost:8000')
+
+// Columns the backend can ORDER BY (mirrors GRANT_SORTABLE_COLUMNS in api.py,
+// plus the precomputed aicure_fit). Any column outside this set is display-only;
+// marking it unsortable avoids showing a sort arrow the server would ignore.
+const SORTABLE_FIELDS = new Set([
+  'aicure_fit', 'amount_usd', 'award_date', 'start_date', 'end_date',
+  'fiscal_year', 'title', 'status', 'source', 'organization', 'therapeutic_area',
+  'sponsor_funder', 'agency_division', 'activity_code', 'org_type', 'country',
+  'pi_name', 'has_trial_link',
+])
 
 // ── Cell renderers ────────────────────────────────────────────────────────────
 
@@ -190,7 +202,7 @@ const COLUMN_DEFS = [
   { ...BASE, field: 'source_url',       headerName: 'Source URL',           width: 200, hide: true,  cellRenderer: SourceUrlCell },
   { ...BASE, field: 'award_id',         headerName: 'Award ID',             width: 160, hide: true },
   { ...BASE, field: 'ingested_at',      headerName: 'Ingested',             width: 130, hide: true,  cellRenderer: DateCell },
-]
+].map(c => ({ ...c, sortable: SORTABLE_FIELDS.has(c.field) }))
 
 const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: false }
 
