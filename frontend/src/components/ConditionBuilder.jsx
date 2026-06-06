@@ -80,8 +80,9 @@ export default function ConditionBuilder({ initialCondition, onApply, onCancel, 
         </select>
       </div>
 
-      {/* Operator row — hide for boolean */}
-      {fieldDef.type !== 'boolean' && (
+      {/* Operator row — shown for every type that has operators, including
+          boolean (is checked / is not checked). */}
+      {operators.length > 0 && (
         <div className="cond-row">
           <label className="cond-label">Condition</label>
           <select
@@ -97,8 +98,8 @@ export default function ConditionBuilder({ initialCondition, onApply, onCancel, 
       )}
 
       {/* Value row */}
-      {fieldDef.type === 'boolean' && (
-        <p className="cond-boolean-hint">{fieldDef.hint || 'Toggle filter.'}</p>
+      {fieldDef.type === 'boolean' && fieldDef.hint && (
+        <p className="cond-boolean-hint">{fieldDef.hint}</p>
       )}
 
       {fieldDef.type === 'select' && (

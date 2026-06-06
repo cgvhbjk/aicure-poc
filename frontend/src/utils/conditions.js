@@ -64,7 +64,10 @@ export const FILTER_FIELDS = [
 ]
 
 export const OPERATORS_FOR_TYPE = {
-  select:  [{ value: 'is', label: 'is' }, { value: 'is_not', label: 'is not' }],
+  // Only `is` (inclusion) — the backend multi-select params are IN-lists with no
+  // exclusion, so an `is_not` option here would silently filter nothing. (The
+  // formatter still renders a legacy `≠` condition gracefully.)
+  select:  [{ value: 'is', label: 'is' }],
   text:    [{ value: 'contains', label: 'contains' }, { value: 'not_contains', label: 'does not contain' }, { value: 'is', label: 'is exactly' }],
   number:  [
     { value: 'gte', label: '≥' },

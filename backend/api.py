@@ -112,12 +112,25 @@ def run_daily_news_and_send(refresh: bool = True):
     return emailer.send_daily_news_digest()
 
 
+def run_daily_rescore():
+    """Re-run the AiCure fit backfill. The score is time-dependent (immediacy
+    decays as start/award dates pass), so a snapshot taken at ingest drifts;
+    re-scoring daily keeps the persisted aicure_fit (which the grids sort on)
+    current between weekly ingests."""
+    try:
+        from score_backfill import backfill
+        backfill()
+    except Exception as e:
+        print(f"[scheduler] daily rescore ERROR: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(run_daily_news, "cron", hour=6, minute=0, id="daily_news")
+    scheduler.add_job(run_daily_rescore, "cron", hour=7, minute=0, id="daily_rescore")
     scheduler.start()
-    print("[scheduler] Daily news job scheduled at 06:00 UTC")
+    print("[scheduler] Daily news job at 06:00 UTC, fit rescore at 07:00 UTC")
     yield
     scheduler.shutdown(wait=False)
 
@@ -1351,10 +1364,11 @@ def _grants_where(q, source, therapeutic_area, status, country, country_q,
 def _grants_order_by(sort, sort_dir):
     """ORDER BY clause for grants. aicure_fit is a real (precomputed) column, so
     the default fit ranking sorts in SQL like any other; unknown columns fall
-    back to it."""
+    back to it. `(col IS NULL)` keeps NULLs last without the `NULLS LAST` syntax,
+    which only exists on SQLite >= 3.30 (the deploy image may be older)."""
     col = sort if (sort in GRANT_SORTABLE_COLUMNS or sort == "aicure_fit") else "aicure_fit"
     direction = "ASC" if (sort_dir or "desc").lower() == "asc" else "DESC"
-    return f"ORDER BY {col} {direction} NULLS LAST, ingested_at DESC"
+    return f"ORDER BY ({col} IS NULL), {col} {direction}, ingested_at DESC"
 
 
 @app.get("/grants")
@@ -1428,6 +1442,15 @@ _GRANT_EXPORT_COLUMNS = [
 ]
 
 
+def _csv_safe(value):
+    """Neutralize spreadsheet formula injection. Grant fields come from external
+    feeds, so a cell beginning with = + - @ (or a leading tab/CR) could execute
+    as a formula in Excel/Sheets — prefix those with a single quote."""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 # Declared before /grants/{grant_id} so "export" isn't captured as a grant id.
 @app.get("/grants/export")
 def export_grants(
@@ -1462,7 +1485,10 @@ def export_grants(
         award_date_from, award_date_to)
 
     def rows_iter():
-        conn = get_connection()
+        # check_same_thread=False: Starlette iterates this generator across anyio
+        # worker threads, so the connection may be created on one thread and
+        # used on another. Only one thread touches it at a time here.
+        conn = get_connection(check_same_thread=False)
         try:
             buf = io.StringIO()
             writer = csv.writer(buf)
@@ -1481,7 +1507,7 @@ def export_grants(
                 g = row_to_dict(r)
                 if g.get("aicure_fit") is None:
                     g["aicure_fit"] = score_grant(g)
-                writer.writerow([g.get(field) for field, _ in _GRANT_EXPORT_COLUMNS])
+                writer.writerow([_csv_safe(g.get(field)) for field, _ in _GRANT_EXPORT_COLUMNS])
                 yield flush()
         finally:
             conn.close()

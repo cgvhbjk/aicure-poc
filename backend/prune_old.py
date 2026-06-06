@@ -50,6 +50,15 @@ def prune_old(dry_run=False, cutoff_days=365):
             )
             conn.execute(f"DELETE FROM trials WHERE id IN ({placeholders})", old_trial_ids)
 
+            # Re-sync the denormalized has_news flag: any trial still marked
+            # has_news=1 but with no surviving links (its links may have been
+            # deleted above) gets cleared, so /trials has_news filtering stays
+            # accurate.
+            conn.execute(
+                "UPDATE trials SET has_news = 0 WHERE has_news = 1 AND id NOT IN "
+                "(SELECT DISTINCT trial_id FROM trial_news_links WHERE trial_id IS NOT NULL)"
+            )
+
         for gid in old_grant_ids:
             conn.execute("DELETE FROM grant_trial_links WHERE grant_id = ?", (gid,))
 
