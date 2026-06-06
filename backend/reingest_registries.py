@@ -24,4 +24,7 @@ for i, (name, fn) in enumerate(steps, 1):
     except Exception as e:
         print(f"  ERROR in {name}: {e} — continuing")
 
+from score_backfill import backfill
+print("Scoring (aicure_fit)...")
+backfill()
 print("Done.")

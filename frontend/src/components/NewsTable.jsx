@@ -4,6 +4,7 @@ import { getNews } from '../api'
 import FieldsPanel from './FieldsPanel'
 import FilterBar from './FilterBar'
 import { NEWS_FILTER_FIELDS } from '../utils/conditions'
+import { attachGridStateListeners } from '../utils/gridEvents'
 
 const STATUS_COLORS = {
   RECRUITING:             { background: '#dcfce7', color: '#166534' },
@@ -163,9 +164,7 @@ export default function NewsTable({
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
-      const params = { ...filters, page_size: 10000 }
-      if (params.linked_only === null) delete params.linked_only
-      const res = await getNews(params)
+      const res = await getNews({ ...filters, page_size: 10000 })
       setRowData(res.data.results)
       setTotal(res.data.total)
     } catch (e) {
@@ -181,14 +180,7 @@ export default function NewsTable({
 
   const handleGridReady = useCallback((params) => {
     onGridReadyProp?.(params.api)
-    const bump = () => onGridStateChange?.()
-    const events = [
-      'columnVisible', 'columnMoved', 'columnPinned', 'columnResized',
-      'sortChanged', 'filterChanged',
-    ]
-    events.forEach(ev => {
-      try { params.api.addEventListener(ev, bump) } catch {}
-    })
+    attachGridStateListeners(params.api, onGridStateChange)
   }, [onGridReadyProp, onGridStateChange])
 
   return (
@@ -203,7 +195,7 @@ export default function NewsTable({
         </button>
 
         <FilterBar
-          conditions={conditions || []}
+          conditions={conditions}
           onAdd={onAddCondition}
           onEdit={onEditCondition}
           onRemove={onRemoveCondition}

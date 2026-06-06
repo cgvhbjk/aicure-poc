@@ -58,4 +58,7 @@ for name, fn, source_key in steps:
     except Exception as e:
         print(f"  ERROR: {e}")
 
+from score_backfill import backfill
+print("Scoring (aicure_fit)...")
+backfill()
 print("Done.")

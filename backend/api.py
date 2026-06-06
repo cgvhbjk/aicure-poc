@@ -17,8 +17,19 @@ from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from db import get_connection
+from scoring import score_grant, score_trial
 
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Grant columns the grid may sort on server-side. "aicure_fit" is handled
+# separately (computed in Python, not a DB column); anything off this list
+# falls back to the default amount ordering.
+GRANT_SORTABLE_COLUMNS = {
+    "amount_usd", "award_date", "start_date", "end_date", "fiscal_year",
+    "title", "status", "source", "organization", "therapeutic_area",
+    "sponsor_funder", "agency_division", "activity_code", "org_type",
+    "country", "pi_name", "has_trial_link",
+}
 _UPLOADS_DIR = os.path.join(_BACKEND_DIR, "data", "uploads")
 os.makedirs(_UPLOADS_DIR, exist_ok=True)
 
@@ -232,7 +243,12 @@ def get_trials(
     ).fetchall()
 
     conn.close()
-    return {"total": total, "page": page, "results": [row_to_dict(r) for r in rows]}
+    results = [row_to_dict(r) for r in rows]
+    for t in results:
+        # Prefer the precomputed score; fall back for any un-backfilled row.
+        if t.get("aicure_fit") is None:
+            t["aicure_fit"] = score_trial(t)
+    return {"total": total, "page": page, "results": results}
 
 
 @app.get("/news")
@@ -1291,6 +1307,8 @@ def get_grants(
     fiscal_year_max: Optional[int] = None,
     award_date_from: Optional[str] = None,
     award_date_to: Optional[str] = None,
+    sort: Optional[str] = "aicure_fit",
+    sort_dir: str = Query("desc", alias="dir"),
     page: int = 1,
     page_size: int = 100,
 ):
@@ -1387,14 +1405,28 @@ def get_grants(
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
     total = conn.execute(f"SELECT COUNT(*) FROM grants {where_sql}", params).fetchone()[0]
+    total_funding = conn.execute(
+        f"SELECT COALESCE(SUM(amount_usd), 0) FROM grants {where_sql}", params
+    ).fetchone()[0]
     offset = (page - 1) * page_size
+
+    # aicure_fit is precomputed (score_backfill.py) into a real column, so the
+    # default fit ranking paginates server-side like any other sort.
+    col = sort if (sort in GRANT_SORTABLE_COLUMNS or sort == "aicure_fit") else "aicure_fit"
+    direction = "ASC" if (sort_dir or "desc").lower() == "asc" else "DESC"
     rows = conn.execute(
-        f"SELECT * FROM grants {where_sql} ORDER BY amount_usd DESC NULLS LAST, ingested_at DESC LIMIT ? OFFSET ?",
+        f"SELECT * FROM grants {where_sql} "
+        f"ORDER BY {col} {direction} NULLS LAST, ingested_at DESC LIMIT ? OFFSET ?",
         params + [page_size, offset],
     ).fetchall()
 
     conn.close()
-    return {"total": total, "page": page, "results": [row_to_dict(r) for r in rows]}
+    results = [row_to_dict(r) for r in rows]
+    for g in results:
+        # Fallback for any row not yet backfilled (e.g. just uploaded).
+        if g.get("aicure_fit") is None:
+            g["aicure_fit"] = score_grant(g)
+    return {"total": total, "total_funding": total_funding, "page": page, "results": results}
 
 
 @app.get("/grants/{grant_id}/trials")

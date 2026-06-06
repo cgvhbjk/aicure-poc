@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { AgGridReact } from 'ag-grid-react'
 import { getGrants } from '../api'
 import GrantDetailPanel from './GrantDetailPanel'
 import FieldsPanel from './FieldsPanel'
 import FilterBar from './FilterBar'
 import { FUNDING_FILTER_FIELDS } from '../utils/conditions'
-import { computeGrantFitScore, loadGrantScoreConfig } from '../utils/scoreConfig'
+import { attachGridStateListeners } from '../utils/gridEvents'
 
 const _API_BASE = import.meta.env.PROD ? '' : 'http://localhost:8000'
 
@@ -145,7 +145,7 @@ function FitScoreCell({ value }) {
 
 // ── Column definitions ────────────────────────────────────────────────────────
 
-const BASE = { sortable: true, resizable: true, filter: true }
+const BASE = { sortable: true, resizable: true, filter: false }
 
 const COLUMN_DEFS = [
   { ...BASE, field: 'has_trial_link',   headerName: '🔗',                  width: 48,  hide: false, cellRenderer: TrialLinkDot,        filter: false, resizable: false, maxWidth: 48 },
@@ -157,7 +157,6 @@ const COLUMN_DEFS = [
     hide: false,
     cellStyle: { textAlign: 'right' },
     type: 'numericColumn',
-    valueGetter: ({ data }) => data ? computeGrantFitScore(data, loadGrantScoreConfig()) : null,
     cellRenderer: FitScoreCell,
     filter: false,
   },
@@ -193,7 +192,7 @@ const COLUMN_DEFS = [
   { ...BASE, field: 'ingested_at',      headerName: 'Ingested',             width: 130, hide: true,  cellRenderer: DateCell },
 ]
 
-const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: true }
+const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: false }
 
 function fmtMillions(n) {
   if (!n) return null
@@ -216,7 +215,6 @@ export default function FundingTable({
   onGridStateChange,
 }) {
   const gridRef = useRef(null)
-  const [rowData, setRowData] = useState([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [totalFunding, setTotalFunding] = useState(0)
@@ -224,8 +222,11 @@ export default function FundingTable({
   const [fieldsOpen, setFieldsOpen] = useState(false)
   const [filterOpen, setFilterOpen] = useState(false)
 
-  // Filter state
-  const [searchText, setSearchText] = useState('')
+  // Sidebar filter state. The inline FilterBar handles q/source/area/status/
+  // country/award_date/amount/has_trial_link; the sidebar covers the
+  // remaining backend params (org_type, activity_code, research_type,
+  // agency_division, fiscal_year_*) that don't yet have ConditionBuilder
+  // entries.
   const [selectedSources, setSelectedSources] = useState([])
   const [selectedAreas, setSelectedAreas] = useState([])
   const [selectedStatuses, setSelectedStatuses] = useState([])
@@ -256,7 +257,6 @@ export default function FundingTable({
     setFn((prev) => prev.includes(item) ? prev.filter(x => x !== item) : [...prev, item])
 
   const apiFilters = {
-    q: searchText || undefined,
     source: selectedSources.length ? selectedSources : undefined,
     therapeutic_area: selectedAreas.length ? selectedAreas : undefined,
     status: selectedStatuses.length ? selectedStatuses : undefined,
@@ -273,37 +273,39 @@ export default function FundingTable({
     ...filters,
   }
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await getGrants({ ...apiFilters, page_size: 10000 })
-      const results = res.data.results
-      setRowData(results)
-      setTotal(res.data.total)
-      setTotalFunding(results.reduce((sum, g) => sum + (g.amount_usd || 0), 0))
-    } catch (e) {
-      console.error('Failed to fetch grants:', e)
-    } finally {
-      setLoading(false)
-    }
+  // Server-side pagination via AG Grid's infinite row model: the grid pulls one
+  // page at a time as the user pages through, instead of loading every grant up
+  // front. Sorting — including the precomputed aicure_fit — is pushed to the API.
+  const datasource = useMemo(() => ({
+    getRows: async (params) => {
+      const pageSize = params.endRow - params.startRow
+      const page = Math.floor(params.startRow / pageSize) + 1
+      const sm = params.sortModel && params.sortModel[0]
+      const sort = sm ? sm.colId : 'aicure_fit'
+      const dir = sm ? sm.sort : 'desc'
+      setLoading(true)
+      try {
+        const res = await getGrants({ ...apiFilters, page, page_size: pageSize, sort, dir })
+        const { results, total: totalCount, total_funding } = res.data
+        setTotal(totalCount)
+        setTotalFunding(total_funding || 0)
+        params.successCallback(results, totalCount)
+      } catch (e) {
+        console.error('Failed to fetch grants:', e)
+        params.failCallback()
+      } finally {
+        setLoading(false)
+      }
+    },
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(apiFilters)])
-
-  useEffect(() => { fetchData() }, [fetchData])
+  }), [JSON.stringify(apiFilters)])
 
   const onExport = () => gridRef.current?.api?.exportDataAsCsv()
   const onRowClicked = (e) => setSelectedGrant(e.data)
 
   const handleGridReady = useCallback((params) => {
     onGridReadyProp?.(params.api)
-    const bump = () => onGridStateChange?.()
-    const events = [
-      'columnVisible', 'columnMoved', 'columnPinned', 'columnResized',
-      'sortChanged', 'filterChanged',
-    ]
-    events.forEach(ev => {
-      try { params.api.addEventListener(ev, bump) } catch {}
-    })
+    attachGridStateListeners(params.api, onGridStateChange)
   }, [onGridReadyProp, onGridStateChange])
 
   const SOURCES = ['NIH_REPORTER', 'USASPENDING', 'PCORI', 'CORDIS', 'UKRI', 'AHA', 'ADA']
@@ -331,7 +333,7 @@ export default function FundingTable({
         </button>
 
         <FilterBar
-          conditions={conditions || []}
+          conditions={conditions}
           onAdd={onAddCondition}
           onEdit={onEditCondition}
           onRemove={onRemoveCondition}
@@ -476,10 +478,12 @@ export default function FundingTable({
         <div className="ag-theme-alpine" style={{ flex: 1, minHeight: 0 }}>
           <AgGridReact
             ref={gridRef}
-            rowData={rowData}
             columnDefs={COLUMN_DEFS}
             defaultColDef={DEFAULT_COL_DEF}
             onGridReady={handleGridReady}
+            rowModelType="infinite"
+            datasource={datasource}
+            cacheBlockSize={100}
             pagination
             paginationPageSize={100}
             enableCellTextSelection

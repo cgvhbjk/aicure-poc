@@ -10,6 +10,7 @@ __pycache__/
 .venv/
 venv/
 *.egg
+.pytest_cache/
 
 # Generated artifacts. The main aicure.db lives in Git LFS (see .gitattributes)
 # so deploys don't have to re-run ingest. The transient journal/WAL/SHM files
@@ -22,6 +23,7 @@ backend/data/aicure.db-wal
 backend/data/aicure.db-shm
 backend/data/email_previews/
 backend/data/nlp_cache.json
+backend/data/logs/
 
 # Node
 node_modules/

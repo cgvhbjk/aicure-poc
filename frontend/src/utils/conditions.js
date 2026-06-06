@@ -74,7 +74,7 @@ export const OPERATORS_FOR_TYPE = {
     { value: 'eq',  label: '=' },
   ],
   date:    [{ value: 'after', label: 'after' }, { value: 'before', label: 'before' }, { value: 'on', label: 'on' }],
-  boolean: [{ value: 'is_true', label: 'is checked' }],
+  boolean: [{ value: 'is_true', label: 'is checked' }, { value: 'is_false', label: 'is not checked' }],
 }
 
 export function makeCondition(field, operator, value) {
@@ -93,7 +93,9 @@ export function formatConditionLabel(condition, fields = FILTER_FIELDS) {
   const fieldDef = fields.find(f => f.key === condition.field)
   const fieldLabel = fieldDef?.label ?? condition.field
 
-  if (fieldDef?.type === 'boolean') return fieldLabel
+  if (fieldDef?.type === 'boolean') {
+    return condition.operator === 'is_false' ? `not ${fieldLabel}` : fieldLabel
+  }
 
   if (fieldDef?.type === 'select') {
     const arr = Array.isArray(condition.value) ? condition.value : (condition.value != null ? [condition.value] : [])
@@ -112,8 +114,6 @@ export function formatConditionLabel(condition, fields = FILTER_FIELDS) {
     return `${fieldLabel}: ${v}`
   }
 
-  if (fieldDef?.type === 'boolean') return fieldLabel
-
   if (fieldDef?.type === 'number') {
     const ops = { gte: '≥', lte: '≤', gt: '>', lt: '<', eq: '=' }
     return `${fieldLabel} ${ops[condition.operator] || '='} ${condition.value}`
@@ -127,71 +127,92 @@ export function formatConditionLabel(condition, fields = FILTER_FIELDS) {
   return `${fieldLabel}: ${condition.value}`
 }
 
+// ── Compile helpers ───────────────────────────────────────────────────────────
+// Each helper mutates `apiParams` based on one condition. Shared across the
+// trial / news / funding compilers so operator semantics stay consistent.
+
+function hasValue(v) {
+  if (v == null) return false
+  if (Array.isArray(v)) return v.length > 0
+  if (typeof v === 'string') return v.trim() !== ''
+  return true
+}
+
+function singleValue(v) {
+  return Array.isArray(v) ? v[0] : v
+}
+
+function applyMultiSelect(apiParams, c, apiKey) {
+  const vals = Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []
+  if (c.operator === 'is' && vals.length) {
+    apiParams[apiKey] = [...(apiParams[apiKey] || []), ...vals]
+  }
+}
+
+// Text fields with a contains / not_contains backend split.
+// `not_contains` routes to an api param suffixed with `_not` which the
+// backend reads as "exclude rows matching this substring".
+function applyTextLike(apiParams, c, apiKey) {
+  const v = singleValue(c.value)
+  if (!hasValue(v)) return
+  if (c.operator === 'not_contains') apiParams[`${apiKey}_not`] = v
+  else apiParams[apiKey] = v
+}
+
+function applyDateRange(apiParams, c, fromKey, toKey) {
+  if (!hasValue(c.value)) return
+  if (c.operator === 'after')      apiParams[fromKey] = c.value
+  else if (c.operator === 'before') apiParams[toKey]   = c.value
+  else if (c.operator === 'on')   { apiParams[fromKey] = c.value; apiParams[toKey] = c.value }
+}
+
+function applyNumberRange(apiParams, c, minKey, maxKey) {
+  if (!hasValue(c.value)) return
+  const n = Number(c.value)
+  if (isNaN(n)) return
+  if (c.operator === 'gte')     apiParams[minKey] = n
+  else if (c.operator === 'lte') apiParams[maxKey] = n
+  else if (c.operator === 'gt')  apiParams[minKey] = n + 1
+  else if (c.operator === 'lt')  apiParams[maxKey] = n - 1
+  else if (c.operator === 'eq') { apiParams[minKey] = n; apiParams[maxKey] = n }
+}
+
+function applyBoolean(apiParams, c, apiKey) {
+  apiParams[apiKey] = c.operator !== 'is_false'
+}
+
+// ── Compilers ─────────────────────────────────────────────────────────────────
+
 export function compileConditions(conditions) {
   const apiParams = {}
   const agGridFilters = {}
 
   for (const c of conditions) {
-    const vals = Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []
-
     switch (c.field) {
-      case 'status':
-        if (c.operator === 'is' && vals.length) apiParams.status = [...(apiParams.status || []), ...vals]
-        break
+      case 'status':            applyMultiSelect(apiParams, c, 'status'); break
+      case 'phase':             applyMultiSelect(apiParams, c, 'phase'); break
+      case 'therapeutic_area':  applyMultiSelect(apiParams, c, 'therapeutic_area'); break
+      case 'country':           applyMultiSelect(apiParams, c, 'country'); break
+      case 'registry':          applyMultiSelect(apiParams, c, 'registry'); break
 
-      case 'phase':
-        if (c.operator === 'is' && vals.length) apiParams.phase = [...(apiParams.phase || []), ...vals]
-        break
+      case 'has_news':          applyBoolean(apiParams, c, 'has_news'); break
 
-      case 'therapeutic_area':
-        if (c.operator === 'is' && vals.length) apiParams.therapeutic_area = [...(apiParams.therapeutic_area || []), ...vals]
-        break
+      case 'enrollment':        applyNumberRange(apiParams, c, 'min_enrollment', 'max_enrollment'); break
 
-      case 'country':
-        if (c.operator === 'is' && vals.length) apiParams.country = [...(apiParams.country || []), ...vals]
-        break
-
-      case 'registry':
-        if (c.operator === 'is' && vals.length) apiParams.registry = [...(apiParams.registry || []), ...vals]
-        break
-
-      case 'has_news':
-        apiParams.has_news = true
-        break
-
-      case 'enrollment': {
-        const n = Number(c.value)
-        if (!isNaN(n)) {
-          if (c.operator === 'gte') apiParams.min_enrollment = n
-          else if (c.operator === 'lte') apiParams.max_enrollment = n
-          else if (c.operator === 'gt')  apiParams.min_enrollment = n + 1
-          else if (c.operator === 'lt')  apiParams.max_enrollment = n - 1
-          else if (c.operator === 'eq') { apiParams.min_enrollment = n; apiParams.max_enrollment = n }
-        }
-        break
-      }
-
-      case 'start_date':
-        if (c.operator === 'after')       apiParams.start_date_from = c.value
-        else if (c.operator === 'before') apiParams.start_date_to   = c.value
-        else if (c.operator === 'on')   { apiParams.start_date_from = c.value; apiParams.start_date_to = c.value }
-        break
-
-      case 'primary_completion':
-        if (c.operator === 'after')       apiParams.completion_date_from = c.value
-        else if (c.operator === 'before') apiParams.completion_date_to   = c.value
-        else if (c.operator === 'on')   { apiParams.completion_date_from = c.value; apiParams.completion_date_to = c.value }
-        break
+      case 'start_date':         applyDateRange(apiParams, c, 'start_date_from', 'start_date_to'); break
+      case 'primary_completion': applyDateRange(apiParams, c, 'completion_date_from', 'completion_date_to'); break
 
       case 'q':
-        apiParams.q = Array.isArray(c.value) ? c.value[0] : c.value
+        if (hasValue(c.value)) apiParams.q = singleValue(c.value)
         break
 
       case 'sponsor': {
+        const v = singleValue(c.value)
+        if (!hasValue(v)) break
         const agType = c.operator === 'is' ? 'equals'
           : c.operator === 'not_contains' ? 'notContains'
           : 'contains'
-        agGridFilters['sponsor'] = { filterType: 'text', type: agType, filter: Array.isArray(c.value) ? c.value[0] : c.value }
+        agGridFilters['sponsor'] = { filterType: 'text', type: agType, filter: v }
         break
       }
 
@@ -206,39 +227,19 @@ export function compileConditions(conditions) {
 export function compileNewsConditions(conditions) {
   const apiParams = {}
   for (const c of conditions) {
-    const vals = Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []
     switch (c.field) {
       case 'q':
-        apiParams.q = Array.isArray(c.value) ? c.value[0] : c.value
+        if (hasValue(c.value)) apiParams.q = singleValue(c.value)
         break
-      case 'source':
-        if (c.operator === 'is' && vals.length) apiParams.source = [...(apiParams.source || []), ...vals]
-        break
-      case 'published_at':
-        if (c.operator === 'after')       apiParams.published_at_from = c.value
-        else if (c.operator === 'before') apiParams.published_at_to   = c.value
-        else if (c.operator === 'on')   { apiParams.published_at_from = c.value; apiParams.published_at_to = c.value }
-        break
-      case 'drug_mentioned':
-        apiParams.drug_mentioned = Array.isArray(c.value) ? c.value[0] : c.value
-        break
-      case 'phase_mentioned':
-        apiParams.phase_mentioned = Array.isArray(c.value) ? c.value[0] : c.value
-        break
-      case 'sponsor_mentioned':
-        apiParams.sponsor_mentioned = Array.isArray(c.value) ? c.value[0] : c.value
-        break
-      case 'linked_only':
-        apiParams.linked_only = true
-        break
-      case 'is_announcement':
-        apiParams.is_trial_announcement = true
-        break
-      case 'is_results':
-        apiParams.is_trial_results = true
-        break
-      default:
-        break
+      case 'source':            applyMultiSelect(apiParams, c, 'source'); break
+      case 'published_at':      applyDateRange(apiParams, c, 'published_at_from', 'published_at_to'); break
+      case 'drug_mentioned':    applyTextLike(apiParams, c, 'drug_mentioned'); break
+      case 'phase_mentioned':   applyTextLike(apiParams, c, 'phase_mentioned'); break
+      case 'sponsor_mentioned': applyTextLike(apiParams, c, 'sponsor_mentioned'); break
+      case 'linked_only':       applyBoolean(apiParams, c, 'linked_only'); break
+      case 'is_announcement':   applyBoolean(apiParams, c, 'is_trial_announcement'); break
+      case 'is_results':        applyBoolean(apiParams, c, 'is_trial_results'); break
+      default: break
     }
   }
   return { apiParams }
@@ -247,42 +248,18 @@ export function compileNewsConditions(conditions) {
 export function compileFundingConditions(conditions) {
   const apiParams = {}
   for (const c of conditions) {
-    const vals = Array.isArray(c.value) ? c.value : c.value != null ? [c.value] : []
     switch (c.field) {
       case 'q':
-        apiParams.q = Array.isArray(c.value) ? c.value[0] : c.value
+        if (hasValue(c.value)) apiParams.q = singleValue(c.value)
         break
-      case 'source':
-        if (c.operator === 'is' && vals.length) apiParams.source = [...(apiParams.source || []), ...vals]
-        break
-      case 'therapeutic_area':
-        if (c.operator === 'is' && vals.length) apiParams.therapeutic_area = [...(apiParams.therapeutic_area || []), ...vals]
-        break
-      case 'status':
-        if (c.operator === 'is' && vals.length) apiParams.status = [...(apiParams.status || []), ...vals]
-        break
-      case 'country':
-        apiParams.country_q = Array.isArray(c.value) ? c.value[0] : c.value
-        break
-      case 'award_date':
-        if (c.operator === 'after')       apiParams.award_date_from = c.value
-        else if (c.operator === 'before') apiParams.award_date_to   = c.value
-        else if (c.operator === 'on')   { apiParams.award_date_from = c.value; apiParams.award_date_to = c.value }
-        break
-      case 'amount_usd': {
-        const n = Number(c.value)
-        if (!isNaN(n)) {
-          if (c.operator === 'gte' || c.operator === 'gt') apiParams.min_amount = n
-          else if (c.operator === 'lte' || c.operator === 'lt') apiParams.max_amount = n
-          else if (c.operator === 'eq') { apiParams.min_amount = n; apiParams.max_amount = n }
-        }
-        break
-      }
-      case 'has_trial_link':
-        apiParams.has_trial_link = true
-        break
-      default:
-        break
+      case 'source':           applyMultiSelect(apiParams, c, 'source'); break
+      case 'therapeutic_area': applyMultiSelect(apiParams, c, 'therapeutic_area'); break
+      case 'status':           applyMultiSelect(apiParams, c, 'status'); break
+      case 'country':          applyTextLike(apiParams, c, 'country_q'); break
+      case 'award_date':       applyDateRange(apiParams, c, 'award_date_from', 'award_date_to'); break
+      case 'amount_usd':       applyNumberRange(apiParams, c, 'min_amount', 'max_amount'); break
+      case 'has_trial_link':   applyBoolean(apiParams, c, 'has_trial_link'); break
+      default: break
     }
   }
   return { apiParams }

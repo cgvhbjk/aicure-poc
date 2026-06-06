@@ -21,6 +21,27 @@ function useDebounce(value, delay) {
   return debounced
 }
 
+// Per-tab condition list state + handlers. Three tabs (trials/news/funding)
+// each track their own list, with identical add/edit/remove/clear semantics —
+// this hook is the shared shape.
+function useConditionList() {
+  const [conditions, setConditions] = useState([])
+  const add    = useCallback((c)  => setConditions(prev => [...prev, c]),                       [])
+  const edit   = useCallback((c)  => setConditions(prev => prev.map(x => x.id === c.id ? c : x)), [])
+  const remove = useCallback((id) => setConditions(prev => prev.filter(x => x.id !== id)),       [])
+  const clear  = useCallback(()   => setConditions([]),                                          [])
+  const getCurrent = useCallback(() => conditions, [conditions])
+  return { conditions, setConditions, add, edit, remove, clear, getCurrent }
+}
+
+// Counter that ticks each time the grid mutates layout/sort/filter state —
+// ViewsSidebar diffs against this to mark a view as modified.
+function useGridStateBump() {
+  const [value, setValue] = useState(0)
+  const bump = useCallback(() => setValue(v => v + 1), [])
+  return { value, bump }
+}
+
 function CheckGroup({ label, options, selected, onToggle, labelFn }) {
   return (
     <div className="filter-group">
@@ -47,14 +68,10 @@ export default function App() {
   const [stats, setStats] = useState(null)
   const [filterOpen, setFilterOpen] = useState(false)
 
-  // Trial filters — Airtable-style conditions
-  const [conditions, setConditions] = useState([])
-
-  // News conditions (Airtable-style, replaces old checkbox state)
-  const [newsConditions, setNewsConditions] = useState([])
-
-  // Funding conditions
-  const [fundingConditions, setFundingConditions] = useState([])
+  // Per-tab condition lists
+  const trials = useConditionList()
+  const news = useConditionList()
+  const funding = useConditionList()
 
   // Org filters (still simple checkbox sidebar)
   const [orgSearchText, setOrgSearchText] = useState('')
@@ -76,36 +93,12 @@ export default function App() {
   const newsApiRef = useRef(null)
   const fundingApiRef = useRef(null)
 
-  // Grid state bump counters (trigger ViewsSidebar auto-save)
-  const [gridStateBump, setGridStateBump] = useState(0)
-  const bumpGridState = useCallback(() => setGridStateBump(v => v + 1), [])
-  const [newsGridStateBump, setNewsGridStateBump] = useState(0)
-  const bumpNewsGridState = useCallback(() => setNewsGridStateBump(v => v + 1), [])
-  const [fundingGridStateBump, setFundingGridStateBump] = useState(0)
-  const bumpFundingGridState = useCallback(() => setFundingGridStateBump(v => v + 1), [])
+  // Per-tab grid-state bump counters (trigger ViewsSidebar auto-save)
+  const trialGridBump = useGridStateBump()
+  const newsGridBump = useGridStateBump()
+  const fundingGridBump = useGridStateBump()
 
   const debouncedOrgSearch = useDebounce(orgSearchText, 400)
-
-  // Trials condition handlers
-  const addCondition = useCallback((c) => setConditions(prev => [...prev, c]), [])
-  const editCondition = useCallback((c) => setConditions(prev => prev.map(x => x.id === c.id ? c : x)), [])
-  const removeCondition = useCallback((id) => setConditions(prev => prev.filter(x => x.id !== id)), [])
-  const clearConditions = useCallback(() => setConditions([]), [])
-  const getCurrentConditions = useCallback(() => conditions, [conditions])
-
-  // News condition handlers
-  const addNewsCondition = useCallback((c) => setNewsConditions(prev => [...prev, c]), [])
-  const editNewsCondition = useCallback((c) => setNewsConditions(prev => prev.map(x => x.id === c.id ? c : x)), [])
-  const removeNewsCondition = useCallback((id) => setNewsConditions(prev => prev.filter(x => x.id !== id)), [])
-  const clearNewsConditions = useCallback(() => setNewsConditions([]), [])
-  const getCurrentNewsConditions = useCallback(() => newsConditions, [newsConditions])
-
-  // Funding condition handlers
-  const addFundingCondition = useCallback((c) => setFundingConditions(prev => [...prev, c]), [])
-  const editFundingCondition = useCallback((c) => setFundingConditions(prev => prev.map(x => x.id === c.id ? c : x)), [])
-  const removeFundingCondition = useCallback((id) => setFundingConditions(prev => prev.filter(x => x.id !== id)), [])
-  const clearFundingConditions = useCallback(() => setFundingConditions([]), [])
-  const getCurrentFundingConditions = useCallback(() => fundingConditions, [fundingConditions])
 
   useEffect(() => {
     getStats().then((r) => setStats(r.data)).catch(console.error)
@@ -120,18 +113,18 @@ export default function App() {
     setFn((prev) => (prev.includes(item) ? prev.filter((x) => x !== item) : [...prev, item]))
 
   const { apiParams: trialFilters, agGridFilters } = useMemo(
-    () => compileConditions(conditions),
-    [conditions]
+    () => compileConditions(trials.conditions),
+    [trials.conditions]
   )
 
   const { apiParams: newsFilters } = useMemo(
-    () => compileNewsConditions(newsConditions),
-    [newsConditions]
+    () => compileNewsConditions(news.conditions),
+    [news.conditions]
   )
 
   const { apiParams: fundingFilters } = useMemo(
-    () => compileFundingConditions(fundingConditions),
-    [fundingConditions]
+    () => compileFundingConditions(funding.conditions),
+    [funding.conditions]
   )
 
   const orgFilters = useMemo(
@@ -144,9 +137,9 @@ export default function App() {
   )
 
   const clearFilters = () => {
-    setConditions([])
-    setNewsConditions([])
-    setFundingConditions([])
+    trials.clear()
+    news.clear()
+    funding.clear()
     setOrgSearchText('')
     setSelectedOrgTypes([])
     setOrgHasTrialsOnly(false)
@@ -248,30 +241,30 @@ export default function App() {
           <ViewsSidebar
             tab="trials"
             gridApiRef={trialApiRef}
-            getCurrentConditions={getCurrentConditions}
-            onApplyConditions={setConditions}
-            conditions={conditions}
-            gridStateBump={gridStateBump}
+            getCurrentConditions={trials.getCurrent}
+            onApplyConditions={trials.setConditions}
+            conditions={trials.conditions}
+            gridStateBump={trialGridBump.value}
           />
         )}
         {activeTab === 'news' && (
           <ViewsSidebar
             tab="news"
             gridApiRef={newsApiRef}
-            getCurrentConditions={getCurrentNewsConditions}
-            onApplyConditions={setNewsConditions}
-            conditions={newsConditions}
-            gridStateBump={newsGridStateBump}
+            getCurrentConditions={news.getCurrent}
+            onApplyConditions={news.setConditions}
+            conditions={news.conditions}
+            gridStateBump={newsGridBump.value}
           />
         )}
         {activeTab === 'funding' && (
           <ViewsSidebar
             tab="funding"
             gridApiRef={fundingApiRef}
-            getCurrentConditions={getCurrentFundingConditions}
-            onApplyConditions={setFundingConditions}
-            conditions={fundingConditions}
-            gridStateBump={fundingGridStateBump}
+            getCurrentConditions={funding.getCurrent}
+            onApplyConditions={funding.setConditions}
+            conditions={funding.conditions}
+            gridStateBump={fundingGridBump.value}
           />
         )}
 
@@ -325,27 +318,27 @@ export default function App() {
               <TrialsTable
                 filters={trialFilters}
                 agGridFilters={agGridFilters}
-                conditions={conditions}
-                onAddCondition={addCondition}
-                onEditCondition={editCondition}
-                onRemoveCondition={removeCondition}
-                onClearConditions={clearConditions}
+                conditions={trials.conditions}
+                onAddCondition={trials.add}
+                onEditCondition={trials.edit}
+                onRemoveCondition={trials.remove}
+                onClearConditions={trials.clear}
                 therapeuticAreas={therapeuticAreas}
                 countries={countries}
                 onGridReady={(api) => { trialApiRef.current = api }}
-                onGridStateChange={bumpGridState}
+                onGridStateChange={trialGridBump.bump}
               />
             )}
             {activeTab === 'news' && (
               <NewsTable
                 filters={newsFilters}
-                conditions={newsConditions}
-                onAddCondition={addNewsCondition}
-                onEditCondition={editNewsCondition}
-                onRemoveCondition={removeNewsCondition}
-                onClearConditions={clearNewsConditions}
+                conditions={news.conditions}
+                onAddCondition={news.add}
+                onEditCondition={news.edit}
+                onRemoveCondition={news.remove}
+                onClearConditions={news.clear}
                 onGridReady={(api) => { newsApiRef.current = api }}
-                onGridStateChange={bumpNewsGridState}
+                onGridStateChange={newsGridBump.bump}
               />
             )}
             {activeTab === 'organizations' && activeOrgsSubTab === 'table' && (
@@ -360,13 +353,13 @@ export default function App() {
               <FundingTable
                 filters={fundingFilters}
                 onSelectTrial={setOrgSelectedTrial}
-                conditions={fundingConditions}
-                onAddCondition={addFundingCondition}
-                onEditCondition={editFundingCondition}
-                onRemoveCondition={removeFundingCondition}
-                onClearConditions={clearFundingConditions}
+                conditions={funding.conditions}
+                onAddCondition={funding.add}
+                onEditCondition={funding.edit}
+                onRemoveCondition={funding.remove}
+                onClearConditions={funding.clear}
                 onGridReady={(api) => { fundingApiRef.current = api }}
-                onGridStateChange={bumpFundingGridState}
+                onGridStateChange={fundingGridBump.bump}
               />
             )}
             {activeTab === 'merges' && (

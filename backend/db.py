@@ -75,7 +75,8 @@ def _init_db():
             eudract_number        TEXT,
             registry_sources      TEXT DEFAULT '["ClinicalTrials.gov"]',
             all_registry_ids      TEXT,
-            eu_member_states      TEXT
+            eu_member_states      TEXT,
+            aicure_fit            INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS registry_source_records (
@@ -226,7 +227,8 @@ def _init_db():
             source_url            TEXT,
             raw_snapshot_path     TEXT,
             ingested_at           TEXT,
-            has_trial_link        INTEGER DEFAULT 0
+            has_trial_link        INTEGER DEFAULT 0,
+            aicure_fit            INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS grant_trial_links (
@@ -274,6 +276,11 @@ def _init_db():
         # every pull (INSERT OR REPLACE), so it can't mark "new this week";
         # first_seen can. The weekly grants digest windows on it.
         "ALTER TABLE grants ADD COLUMN first_seen TEXT",
+        # Precomputed AiCure opportunity score (0-100, see scoring.py). Stored so
+        # the grid can ORDER BY / paginate on it server-side; (re)populated by
+        # score_backfill.py after each ingest.
+        "ALTER TABLE grants ADD COLUMN aicure_fit INTEGER",
+        "ALTER TABLE trials ADD COLUMN aicure_fit INTEGER",
     ]:
         try:
             conn.execute(alter)

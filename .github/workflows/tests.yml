@@ -1,0 +1,23 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false          # the 300MB DB isn't needed; scoring tests are pure
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # The scorer only needs python-dateutil at runtime; pytest to run the suite.
+      - name: Install test deps
+        run: pip install python-dateutil pytest
+      - name: Run scoring tests
+        working-directory: backend
+        run: python -m pytest -q

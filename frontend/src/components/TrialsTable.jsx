@@ -4,8 +4,7 @@ import { getTrials } from '../api'
 import DetailPanel from './DetailPanel'
 import FieldsPanel from './FieldsPanel'
 import FilterBar from './FilterBar'
-import ScoreConfigPanel from './ScoreConfigPanel'
-import { computeFitScore, loadScoreConfig } from '../utils/scoreConfig'
+import { attachGridStateListeners } from '../utils/gridEvents'
 
 // ── Cell renderers ────────────────────────────────────────────────────────────
 
@@ -207,7 +206,6 @@ const COLUMN_DEFS = [
     hide: false,
     cellStyle: { textAlign: 'right' },
     type: 'numericColumn',
-    valueGetter: ({ data }) => data ? computeFitScore(data, loadScoreConfig()) : null,
     cellRenderer: FitScoreCell,
     filter: false,
   },
@@ -285,7 +283,6 @@ export default function TrialsTable({
   const [total, setTotal] = useState(0)
   const [selectedTrial, setSelectedTrial] = useState(null)
   const [fieldsOpen, setFieldsOpen] = useState(false)
-  const [scoreConfigOpen, setScoreConfigOpen] = useState(false)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -311,16 +308,7 @@ export default function TrialsTable({
   const handleGridReady = useCallback((params) => {
     onGridReadyProp?.(params.api)
     try { params.api.setFilterModel(agGridFilters || {}) } catch {}
-
-    // Bubble grid-state mutations up so the active view can auto-save.
-    const bump = () => onGridStateChange?.()
-    const events = [
-      'columnVisible', 'columnMoved', 'columnPinned', 'columnResized',
-      'sortChanged', 'filterChanged',
-    ]
-    events.forEach(ev => {
-      try { params.api.addEventListener(ev, bump) } catch {}
-    })
+    attachGridStateListeners(params.api, onGridStateChange)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onGridReadyProp, onGridStateChange])
 
@@ -339,7 +327,7 @@ export default function TrialsTable({
         </button>
 
         <FilterBar
-          conditions={conditions || []}
+          conditions={conditions}
           onAdd={onAddCondition}
           onEdit={onEditCondition}
           onRemove={onRemoveCondition}
@@ -349,9 +337,6 @@ export default function TrialsTable({
         />
 
         <span className="toolbar-sep" />
-        <button className="btn-sm" onClick={() => setScoreConfigOpen(true)} title="Configure fit score algorithm">
-          Score ⚙
-        </button>
         <button className="btn-sm" onClick={onExport}>Export CSV</button>
         <span className="row-count">
           {loading ? 'Loading…' : `${total.toLocaleString()} trials`}
@@ -387,15 +372,6 @@ export default function TrialsTable({
 
       {selectedTrial && (
         <DetailPanel trial={selectedTrial} onClose={() => setSelectedTrial(null)} />
-      )}
-
-      {scoreConfigOpen && (
-        <ScoreConfigPanel
-          onClose={() => setScoreConfigOpen(false)}
-          onConfigChange={() => {
-            try { gridRef.current?.api?.refreshCells({ force: true }) } catch {}
-          }}
-        />
       )}
     </div>
   )

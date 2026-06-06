@@ -92,6 +92,15 @@ def run():
     print(f"\nFinished in {elapsed:.1f}s. "
           f"{len(STEPS) - len(failures)}/{len(STEPS)} steps OK.")
 
+    # Precompute the AiCure fit score for everything just ingested so the grids
+    # can sort/paginate on it server-side.
+    try:
+        from score_backfill import backfill
+        print("Scoring (aicure_fit)...")
+        backfill()
+    except Exception as e:
+        print(f"  score backfill ERROR: {e}")
+
     if failures:
         print("Failed steps:")
         for name, err in failures:
