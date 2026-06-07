@@ -5,7 +5,11 @@ name: Daily news digest
 # request wakes the service, refreshes news, builds the digest, and emails it.
 on:
   schedule:
-    - cron: '0 6 * * *'   # 06:00 UTC daily
+    # 13:00 UTC = 09:00 America/New_York while Eastern is on EDT (summer).
+    # GitHub cron is UTC and does NOT observe DST: after the fall-back
+    # (2026-11-01) 13:00 UTC becomes 08:00 EST, so bump this to '0 14 * * *'
+    # then to keep it arriving at 09:00 local (and back to '0 13' each spring).
+    - cron: '0 13 * * *'
   workflow_dispatch:        # manual "Run workflow" button
     inputs:
       refresh:
