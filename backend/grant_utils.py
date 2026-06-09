@@ -4,6 +4,8 @@ from datetime import datetime
 
 from db import get_connection
 from registry_utils import extract_nct  # reuse existing NCT extractor
+# Single source of truth — see text_match.py (was duplicated/diverging here).
+from text_match import DRUG_KEYWORDS, classify_area  # noqa: F401 (re-exported)
 
 GBP_TO_USD = 1.27
 EUR_TO_USD = 1.08
@@ -20,13 +22,6 @@ MEDICAL_KEYWORDS = [
 
 PHASE_PATTERN = re.compile(r'\bphase\s*(1|2|3|4|I{1,3}V?)\b', re.IGNORECASE)
 
-DRUG_KEYWORDS = [
-    "semaglutide", "tirzepatide", "liraglutide", "dulaglutide", "ozempic",
-    "wegovy", "mounjaro", "victoza", "saxenda", "rybelsus", "jardiance",
-    "farxiga", "trulicity", "metformin", "insulin", "glp-1", "sglt2",
-    "dpp-4", "sitagliptin", "empagliflozin", "dapagliflozin",
-]
-
 CONDITION_KEYWORDS = [
     "obesity", "overweight", "type 2 diabetes", "T2D", "heart failure",
     "atrial fibrillation", "cardiovascular", "hypertension", "dyslipidemia",
@@ -41,38 +36,6 @@ def is_medical(text: str) -> bool:
         return False
     t = text.lower()
     return any(k.lower() in t for k in MEDICAL_KEYWORDS)
-
-
-_ONCOLOGY_CUES = ["cancer", "tumor", "tumour", "oncolog", "carcinoma", "neoplas",
-                  "melanoma", "lymphoma", "leukemia", "leukaemia", "metasta", "glioma"]
-_STRONG_CM = ["semaglutide", "tirzepatide", "liraglutide", "dulaglutide", "glp-1",
-              "obesity", "obese", "diabet", "heart failure", "atrial fib"]
-
-
-def classify_area(text: str) -> str:
-    t = (text or "").lower()
-    # Oncology guard: cancer-metabolism / tumor grants were leaking into
-    # "Metabolic / GLP-1" via loose substrings (e.g. "metabolic"). If the text is
-    # clearly oncology and has no strong cardiometabolic anchor, it's off-focus.
-    if any(k in t for k in _ONCOLOGY_CUES) and not any(k in t for k in _STRONG_CM):
-        return "Other"
-    if any(k in t for k in ["obes", "glp", "weight loss", "weight management",
-                              "semaglutide", "tirzepatide", "liraglutide",
-                              "dulaglutide", "bariatric", "cardiometabolic",
-                              "metabolic syndrome"]):
-        return "Metabolic / GLP-1"
-    if "diabet" in t or "insulin" in t or "glycem" in t or "glycaem" in t:
-        return "Diabetes"
-    if any(k in t for k in ["cardiac", "heart", "coronary", "atrial", "cardiovascular",
-                              "hypertens", "blood pressure", "stroke", "arrhythm", "vascular"]):
-        return "Cardiovascular"
-    if any(k in t for k in ["nash", "nafld", "fatty liver", "hepatic", "steatohep"]):
-        return "Liver / NASH"
-    if any(k in t for k in ["kidney", "renal", "nephro", "ckd"]):
-        return "Renal"
-    if "adher" in t or "compliance" in t:
-        return "Adherence / Outcomes"
-    return "Other"
 
 
 def extract_phase(text: str):
@@ -107,23 +70,53 @@ def extract_interventions(text: str) -> str:
     return json.dumps(list(dict.fromkeys(found)))
 
 
-def upsert_grant(record: dict):
-    conn = get_connection()
-    record = dict(record)
-    now = datetime.utcnow().isoformat()
-    record["ingested_at"] = now
-    # first_seen is set once and preserved on re-pull (excluded from the UPDATE
-    # below), so the weekly digest can tell genuinely-new grants from re-pulled
-    # ones. INSERT OR REPLACE would reset it, so we use a targeted upsert.
-    record.setdefault("first_seen", now)
-    cols = list(record.keys())
-    collist = ", ".join(cols)
-    placeholders = ", ".join("?" * len(cols))
-    updates = ", ".join(f"{c}=excluded.{c}" for c in cols if c not in ("id", "first_seen"))
-    conn.execute(
-        f"INSERT INTO grants ({collist}) VALUES ({placeholders}) "
-        f"ON CONFLICT(id) DO UPDATE SET {updates}",
-        list(record.values()),
-    )
-    conn.commit()
-    conn.close()
+# Columns upsert_grant is allowed to write. Guards the dynamic column-name
+# interpolation below: column names come from record.keys() (ultimately derived
+# from external grant-API field maps), so an unexpected key must be rejected
+# rather than spliced into the SQL. Keep in sync with the grants schema in db.py.
+_GRANT_COLUMNS = frozenset({
+    "id", "source", "award_id", "title", "abstract", "pi_name", "pi_email",
+    "organization", "org_type", "sponsor_funder", "amount_usd", "currency",
+    "amount_original", "start_date", "end_date", "award_date", "status",
+    "therapeutic_area", "conditions", "interventions", "phase_mentioned",
+    "linked_trial_id", "country", "source_url", "raw_snapshot_path",
+    "ingested_at", "has_trial_link", "aicure_fit", "activity_code",
+    "agency_division", "fiscal_year", "project_acronym", "research_type",
+    "first_seen",
+})
+
+
+def upsert_grant(record: dict, conn=None):
+    """Insert/update one grant. Pass an open `conn` to batch many upserts on a
+    single connection and commit once (the pullers do this) — avoids the
+    open-commit-close-per-row fsync storm. With no `conn`, opens/commits/closes
+    its own (backward-compatible)."""
+    own = conn is None
+    if own:
+        conn = get_connection()
+    try:
+        record = dict(record)
+        now = datetime.utcnow().isoformat()
+        record["ingested_at"] = now
+        # first_seen is set once and preserved on re-pull (excluded from the
+        # UPDATE below), so the weekly digest can tell genuinely-new grants from
+        # re-pulled ones. INSERT OR REPLACE would reset it, so we use a targeted
+        # upsert.
+        record.setdefault("first_seen", now)
+        cols = list(record.keys())
+        unknown = [c for c in cols if c not in _GRANT_COLUMNS]
+        if unknown:
+            raise ValueError(f"upsert_grant: refusing unknown grant column(s): {unknown}")
+        collist = ", ".join(cols)
+        placeholders = ", ".join("?" * len(cols))
+        updates = ", ".join(f"{c}=excluded.{c}" for c in cols if c not in ("id", "first_seen"))
+        conn.execute(
+            f"INSERT INTO grants ({collist}) VALUES ({placeholders}) "
+            f"ON CONFLICT(id) DO UPDATE SET {updates}",
+            list(record.values()),
+        )
+        if own:
+            conn.commit()
+    finally:
+        if own:
+            conn.close()

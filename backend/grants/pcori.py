@@ -14,6 +14,7 @@ from grant_utils import (
     extract_phase, extract_conditions, extract_interventions,
 )
 from registry_utils import extract_nct
+from db import get_connection
 
 BASE_URL = "https://www.pcori.org"
 PORTFOLIO_URL = f"{BASE_URL}/explore-our-portfolio"
@@ -71,6 +72,7 @@ def pull_pcori():
 
     seen_urls: set = set()
     total_inserted = 0
+    conn = get_connection()  # one connection for the whole pull; commit per term
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
@@ -163,13 +165,15 @@ def pull_pcori():
                         "linked_trial_id": nct,
                         "has_trial_link": 1 if nct else 0,
                     }
-                    upsert_grant(record)
+                    upsert_grant(record, conn)
                     total_inserted += 1
 
+                conn.commit()
                 time.sleep(2.0)
 
         finally:
             ctx.close()
             browser.close()
 
+    conn.close()
     print(f"  PCORI: {total_inserted} grants inserted")

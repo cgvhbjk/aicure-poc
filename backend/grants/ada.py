@@ -10,6 +10,7 @@ from grant_utils import (
     extract_phase, extract_conditions, extract_interventions,
 )
 from registry_utils import extract_nct
+from db import get_connection
 
 # ADA Crossref funder DOI — free, no registration needed
 ADA_FUNDER_DOI = "10.13039/100000041"
@@ -41,6 +42,7 @@ def pull_ada():
     seen_awards: set = set()
     total_inserted = 0
     cursor = "*"
+    conn = get_connection()  # one connection for the whole pull; commit per page
 
     while True:
         try:
@@ -112,15 +114,17 @@ def pull_ada():
                         "linked_trial_id": nct,
                         "has_trial_link": 1 if nct else 0,
                     }
-                    upsert_grant(record)
+                    upsert_grant(record, conn)
                     total_inserted += 1
             except Exception as e:
                 print(f"  [WARN] ADA record error: {e}")
 
+        conn.commit()
         next_cursor = data.get("next-cursor")
         if not next_cursor or next_cursor == cursor:
             break
         cursor = next_cursor
         time.sleep(0.1)
 
+    conn.close()
     print(f"  ADA: {total_inserted} grants inserted")

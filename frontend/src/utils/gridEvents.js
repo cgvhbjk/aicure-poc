@@ -5,10 +5,18 @@ const GRID_STATE_EVENTS = [
   'sortChanged', 'filterChanged',
 ]
 
+// Returns a disposer that detaches the listeners. AG Grid tears down its own
+// event registry on destroy, but callers should still call the disposer on
+// unmount to be symmetric (and to avoid onChange firing during teardown).
 export function attachGridStateListeners(api, onChange) {
-  if (!api || !onChange) return
+  if (!api || !onChange) return () => {}
   const bump = () => onChange()
   GRID_STATE_EVENTS.forEach(ev => {
     try { api.addEventListener(ev, bump) } catch {}
   })
+  return () => {
+    GRID_STATE_EVENTS.forEach(ev => {
+      try { api.removeEventListener(ev, bump) } catch {}
+    })
+  }
 }

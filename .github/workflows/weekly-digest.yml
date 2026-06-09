@@ -1,5 +1,15 @@
 name: Weekly trials & grants digest
 
+# Least-privilege: only needs to read the repo for checkout; no writes.
+permissions:
+  contents: read
+
+# Single-flight: prevent a scheduled run and a manual dispatch from both
+# ingesting + sending and double-emailing the weekly digests.
+concurrency:
+  group: weekly-digest
+  cancel-in-progress: false
+
 # Refreshes trials + grants and emails the weekly digests — entirely on the
 # GitHub runner. Why not via Render like the daily news digest? The ingest needs
 # the ~316MB DB in memory and free-tier Render (512MB) would OOM. The runner has
@@ -21,9 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4          # no lfs: avoids LFS bandwidth; DB comes from cache
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1 — no lfs: DB comes from cache
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: '3.11'
 
@@ -31,7 +41,7 @@ jobs:
       # under a unique key. Caches unused for 7 days are evicted; the weekly
       # restore keeps the chain warm.
       - name: Restore DB cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: backend/data/aicure.db
           key: aicure-db-${{ github.run_id }}

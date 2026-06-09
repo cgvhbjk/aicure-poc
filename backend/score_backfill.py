@@ -12,6 +12,26 @@ import sys
 from db import get_connection
 from scoring import score_grant, score_trial
 
+# The exact columns each scorer reads (see scoring.py). Selecting only these
+# instead of `SELECT *` keeps the unused wide TEXT columns (inclusion/exclusion
+# criteria, raw_snapshot_path, abstracts of unrelated fields, endpoints, …) out
+# of memory on the full-table rescore. Hardcoded allowlists — not user input.
+# NOTE: this narrows the row width, NOT which rows are scored: every row is still
+# rescored on each pass, because the score is time-dependent (immediacy decays as
+# start/award dates pass), so a "skip unchanged rows" optimization would freeze
+# stale scores. Keep these in sync with scoring.py if the scorer reads new fields.
+_GRANT_SCORE_COLS = (
+    "id", "title", "abstract", "conditions", "therapeutic_area", "amount_usd",
+    "country", "award_date", "start_date", "end_date", "organization",
+    "pi_name", "linked_trial_id",
+)
+_TRIAL_SCORE_COLS = (
+    "id", "title_brief", "brief_summary", "conditions", "interventions",
+    "therapeutic_area", "phase", "status", "enrollment", "num_sites",
+    "lead_country", "sponsor", "pi_email", "registry_sources",
+    "epro_ecoa", "digital_biomarkers", "dct_elements", "start_date",
+)
+
 
 def _score_one(scorer, row):
     """Score a single row, isolating failures so one malformed row can't abort
@@ -24,12 +44,14 @@ def _score_one(scorer, row):
         return 0
 
 
-def _backfill_table(conn, table, scorer):
-    rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+def _backfill_table(conn, table, scorer, columns):
+    collist = ", ".join(columns)
+    rows = conn.execute(f"SELECT {collist} FROM {table}").fetchall()
     updates = [(_score_one(scorer, r), r["id"]) for r in rows]
-    conn.executemany(
-        f"UPDATE {table} SET aicure_fit = ? WHERE id = ?", updates
-    )
+    if updates:
+        conn.executemany(
+            f"UPDATE {table} SET aicure_fit = ? WHERE id = ?", updates
+        )
     conn.commit()
     return len(updates)
 
@@ -39,8 +61,8 @@ def backfill(conn=None):
     own = conn is None
     conn = conn or get_connection()
     try:
-        n_grants = _backfill_table(conn, "grants", score_grant)
-        n_trials = _backfill_table(conn, "trials", score_trial)
+        n_grants = _backfill_table(conn, "grants", score_grant, _GRANT_SCORE_COLS)
+        n_trials = _backfill_table(conn, "trials", score_trial, _TRIAL_SCORE_COLS)
         print(f"[score_backfill] scored {n_grants} grants, {n_trials} trials")
         return n_grants, n_trials
     finally:

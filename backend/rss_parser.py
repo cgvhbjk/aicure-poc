@@ -6,6 +6,8 @@ import os
 from datetime import datetime
 from dateutil import parser as dateutil_parser
 from db import get_connection
+# Shared keyword list / flag helper (was a divergent local copy here).
+from text_match import DRUG_KEYWORDS, flag as _flag  # noqa: F401 (DRUG_KEYWORDS re-exported)
 
 SNAPSHOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "snapshots")
 os.makedirs(SNAPSHOT_DIR, exist_ok=True)
@@ -49,12 +51,6 @@ RSS_FEEDS = [
 NCT_PATTERN = re.compile(r"NCT\d{8}")
 PHASE_PATTERN = re.compile(r"\bphase\s*(1|2|3|4|I|II|III|IV)\b", re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
-
-DRUG_KEYWORDS = [
-    "semaglutide", "tirzepatide", "liraglutide", "dulaglutide", "ozempic",
-    "wegovy", "mounjaro", "victoza", "saxenda", "rybelsus", "jardiance",
-    "farxiga", "trulicity", "metformin",
-]
 
 SPONSOR_DOMAINS = [
     "novo nordisk", "eli lilly", "astrazeneca", "pfizer", "merck",
@@ -226,11 +222,6 @@ def _clean(text):
 def _is_relevant(text):
     t = text.lower()
     return any(kw in t for kw in _RELEVANCE_TERMS)
-
-
-def _flag(text, keywords):
-    t = text.lower()
-    return any(k in t for k in keywords)
 
 
 # Precedence: when an item matches multiple types, the earliest wins.

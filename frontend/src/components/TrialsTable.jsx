@@ -278,6 +278,7 @@ export default function TrialsTable({
   therapeuticAreas, countries,
 }) {
   const gridRef = useRef(null)
+  const disposeGridListenersRef = useRef(null)
   const [rowData, setRowData] = useState([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
@@ -308,9 +309,11 @@ export default function TrialsTable({
   const handleGridReady = useCallback((params) => {
     onGridReadyProp?.(params.api)
     try { params.api.setFilterModel(agGridFilters || {}) } catch {}
-    attachGridStateListeners(params.api, onGridStateChange)
+    disposeGridListenersRef.current = attachGridStateListeners(params.api, onGridStateChange)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onGridReadyProp, onGridStateChange])
+
+  useEffect(() => () => { disposeGridListenersRef.current?.() }, [])
 
   const onExport = () => gridRef.current?.api?.exportDataAsCsv()
   const onRowClicked = (e) => setSelectedTrial(e.data)

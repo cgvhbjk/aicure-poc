@@ -227,6 +227,13 @@ export default function FundingTable({
   onGridStateChange,
 }) {
   const gridRef = useRef(null)
+  // Monotonic id of the most recent getRows call. The infinite row model can
+  // have several block requests in flight at once (and a sort/filter change
+  // purges + refetches), so responses can resolve out of order; only the latest
+  // is allowed to write the header totals, preventing a stale response from
+  // clobbering them with the wrong count/sum.
+  const reqSeqRef = useRef(0)
+  const disposeGridListenersRef = useRef(null)
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [totalFunding, setTotalFunding] = useState(0)
@@ -295,18 +302,23 @@ export default function FundingTable({
       const sm = params.sortModel && params.sortModel[0]
       const sort = sm ? sm.colId : 'aicure_fit'
       const dir = sm ? sm.sort : 'desc'
+      const reqId = ++reqSeqRef.current
       setLoading(true)
       try {
         const res = await getGrants({ ...apiFilters, page, page_size: pageSize, sort, dir })
         const { results, total: totalCount, total_funding } = res.data
-        setTotal(totalCount)
-        setTotalFunding(total_funding || 0)
+        // Only the latest request may update the shared header totals; an older
+        // (slower) response must not overwrite a newer one's count/sum.
+        if (reqId === reqSeqRef.current) {
+          setTotal(totalCount)
+          setTotalFunding(total_funding || 0)
+        }
         params.successCallback(results, totalCount)
       } catch (e) {
         console.error('Failed to fetch grants:', e)
         params.failCallback()
       } finally {
-        setLoading(false)
+        if (reqId === reqSeqRef.current) setLoading(false)
       }
     },
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -335,8 +347,11 @@ export default function FundingTable({
 
   const handleGridReady = useCallback((params) => {
     onGridReadyProp?.(params.api)
-    attachGridStateListeners(params.api, onGridStateChange)
+    disposeGridListenersRef.current = attachGridStateListeners(params.api, onGridStateChange)
   }, [onGridReadyProp, onGridStateChange])
+
+  // Detach the grid-state listeners on unmount (symmetric with attach above).
+  useEffect(() => () => { disposeGridListenersRef.current?.() }, [])
 
   const SOURCES = ['NIH_REPORTER', 'USASPENDING', 'PCORI', 'CORDIS', 'UKRI', 'AHA', 'ADA']
   const AREAS = ['Metabolic / GLP-1', 'Diabetes', 'Cardiovascular', 'Adherence / Outcomes', 'Other']

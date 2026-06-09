@@ -10,6 +10,7 @@ from grant_utils import (
     extract_phase, extract_conditions, extract_interventions,
 )
 from registry_utils import extract_nct
+from db import get_connection
 
 SNAPSHOT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "data", "grants"
@@ -73,6 +74,7 @@ def pull_nih_reporter():
     offset = 0
     page = 1
     total_inserted = 0
+    conn = get_connection()  # one connection for the whole pull; commit per page
 
     while True:
         body = dict(SEARCH_BODY)
@@ -144,11 +146,12 @@ def pull_nih_reporter():
                     "linked_trial_id": nct,
                     "has_trial_link": 1 if nct else 0,
                 }
-                upsert_grant(record)
+                upsert_grant(record, conn)
                 total_inserted += 1
             except Exception as e:
                 print(f"  [WARN] NIH record error: {e}")
 
+        conn.commit()
         offset += len(results)
         page += 1
 
@@ -157,4 +160,5 @@ def pull_nih_reporter():
 
         time.sleep(0.2)
 
+    conn.close()
     print(f"  NIH RePORTER: {total_inserted} grants inserted")

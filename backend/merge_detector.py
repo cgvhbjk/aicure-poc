@@ -103,13 +103,15 @@ def _score_pair(a: dict, b: dict) -> tuple:
     return round(score, 4), match_fields, match_scores
 
 
-def _candidate_exists(conn, a_id: str, b_id: str, entity_type: str) -> bool:
-    return bool(conn.execute(
-        """SELECT 1 FROM merge_candidates
-           WHERE entity_type = ?
-           AND ((record_a_id = ? AND record_b_id = ?) OR (record_a_id = ? AND record_b_id = ?))""",
-        (entity_type, a_id, b_id, b_id, a_id),
-    ).fetchone())
+def _load_existing_pairs(conn, entity_type: str) -> set:
+    """All (a, b) pairs already recorded for this entity_type, as order-independent
+    frozensets. Loading them once lets the detectors test membership in memory
+    instead of issuing a per-pair existence query inside their O(N^2) loops."""
+    rows = conn.execute(
+        "SELECT record_a_id, record_b_id FROM merge_candidates WHERE entity_type = ?",
+        (entity_type,),
+    ).fetchall()
+    return {frozenset((a, b)) for a, b in rows}
 
 
 def _auto_merge(conn, a: dict, b: dict, score: float, match_fields: list, match_scores: dict):
@@ -180,6 +182,7 @@ def detect_trial_duplicates() -> int:
              AND status IS NOT NULL"""
     ).fetchall()
     trials = [dict(r) for r in rows]
+    existing = _load_existing_pairs(conn, "trials")
 
     # Two blocking strategies — a pair is considered if it shares either block.
     # 1. (therapeutic_area, phase) catches NCT↔NCT with a populated area.
@@ -215,7 +218,7 @@ def detect_trial_duplicates() -> int:
                     continue
                 seen_pairs.add(pair_key)
 
-                if _candidate_exists(conn, a["id"], b["id"], "trials"):
+                if frozenset((a["id"], b["id"])) in existing:
                     continue
 
                 score, match_fields, match_scores = _score_pair(a, b)
@@ -245,27 +248,46 @@ def detect_trial_duplicates() -> int:
 def detect_org_duplicates() -> int:
     conn = get_connection()
     orgs = [dict(r) for r in conn.execute("SELECT id, canonical_name FROM organizations").fetchall()]
+    existing = _load_existing_pairs(conn, "organizations")
 
     now = datetime.utcnow().isoformat()
     pending = 0
 
-    for i, a in enumerate(orgs):
-        for b in orgs[i + 1:]:
-            sim = _jaccard_tokens(a["canonical_name"], b["canonical_name"])
-            if sim <= 0.7:
-                continue
-            if _candidate_exists(conn, a["id"], b["id"], "organizations"):
-                continue
-            conn.execute(
-                """INSERT INTO merge_candidates
-                   (entity_type, record_a_id, record_b_id, confidence, match_fields,
-                    match_scores, status, created_at)
-                   VALUES ('organizations', ?, ?, ?, ?, ?, 'PENDING', ?)""",
-                (a["id"], b["id"], round(sim, 4),
-                 json.dumps(["canonical_name"]), json.dumps({"canonical_name": round(sim, 4)}),
-                 now),
-            )
-            pending += 1
+    # Token blocking. Two names with Jaccard > 0.7 necessarily share most of their
+    # tokens (Jaccard is 0 when they share none), so a real match always co-occurs
+    # in at least one token's bucket. Comparing only within buckets skips the vast
+    # majority of pairs that share no token and can't clear the threshold — turning
+    # the O(N^2) all-pairs scan into ~O(sum of bucket^2) without missing any match.
+    token_buckets: dict = {}
+    for idx, o in enumerate(orgs):
+        toks = set(re.sub(r"[^\w]", " ", (o["canonical_name"] or "").lower()).split())
+        for tok in toks:
+            token_buckets.setdefault(tok, []).append(idx)
+
+    checked: set = set()
+    for idxs in token_buckets.values():
+        for ii in range(len(idxs)):
+            for jj in range(ii + 1, len(idxs)):
+                i, j = (idxs[ii], idxs[jj]) if idxs[ii] < idxs[jj] else (idxs[jj], idxs[ii])
+                if (i, j) in checked:
+                    continue
+                checked.add((i, j))
+                a, b = orgs[i], orgs[j]
+                if frozenset((a["id"], b["id"])) in existing:
+                    continue
+                sim = _jaccard_tokens(a["canonical_name"], b["canonical_name"])
+                if sim <= 0.7:
+                    continue
+                conn.execute(
+                    """INSERT INTO merge_candidates
+                       (entity_type, record_a_id, record_b_id, confidence, match_fields,
+                        match_scores, status, created_at)
+                       VALUES ('organizations', ?, ?, ?, ?, ?, 'PENDING', ?)""",
+                    (a["id"], b["id"], round(sim, 4),
+                     json.dumps(["canonical_name"]), json.dumps({"canonical_name": round(sim, 4)}),
+                     now),
+                )
+                pending += 1
 
     conn.commit()
     conn.close()

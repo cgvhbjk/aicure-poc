@@ -203,9 +203,17 @@ def analyze(item, use_llm=None, full_text=None):
             res = _analyze_rules(item, full_text)
     except Exception as e:
         print(f"[news_nlp] {backend} path failed ({e}); falling back to rules")
+        import traceback
+        traceback.print_exc()
         res = _analyze_rules(item, full_text)
+        # Tag the degraded path so a silently-downgraded LLM run is visible in the
+        # `method` field downstream (e.g. the digest), not indistinguishable from
+        # a deliberate rules run.
+        res["method"] = f"rules ({backend}-fallback)"
 
-    if cache_key and res.get("method") != "rules":
+    # Don't cache rules output (deliberate OR degraded fallback): a cached
+    # fallback would pin the item to rules and never retry the LLM path.
+    if cache_key and not res.get("method", "").startswith("rules"):
         _cache_put(cache_key, res)
     return res
 

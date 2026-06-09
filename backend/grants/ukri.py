@@ -10,6 +10,7 @@ from grant_utils import (
     extract_phase, extract_conditions, extract_interventions,
 )
 from registry_utils import extract_nct
+from db import get_connection
 
 SEARCH_TERMS = [
     "obesity", "GLP-1", "semaglutide", "tirzepatide", "type 2 diabetes",
@@ -49,6 +50,7 @@ def pull_ukri():
     })
 
     total_inserted = 0
+    conn = get_connection()  # one connection for the whole pull; commit per page
 
     for term in SEARCH_TERMS:
         page = 1
@@ -121,13 +123,15 @@ def pull_ukri():
                         "linked_trial_id": nct,
                         "has_trial_link": 1 if nct else 0,
                     }
-                    upsert_grant(record)
+                    upsert_grant(record, conn)
                     total_inserted += 1
                 except Exception as e:
                     print(f"  [WARN] UKRI record error: {e}")
 
+            conn.commit()
             if page >= total_pages or not projects:
                 break
             page += 1
 
+    conn.close()
     print(f"  UKRI: {total_inserted} grants inserted")
