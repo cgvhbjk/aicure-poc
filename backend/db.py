@@ -202,6 +202,10 @@ def _init_db():
             ON merge_candidates(status);
         CREATE INDEX IF NOT EXISTS idx_merge_candidates_entity
             ON merge_candidates(entity_type, status);
+        -- merge_detector loads existing pairs by entity_type (and de-dupes by
+        -- the (a,b) tuple); this covers that lookup.
+        CREATE INDEX IF NOT EXISTS idx_merge_candidates_pair
+            ON merge_candidates(entity_type, record_a_id, record_b_id);
 
         CREATE TABLE IF NOT EXISTS grants (
             id                    TEXT PRIMARY KEY,
@@ -247,6 +251,34 @@ def _init_db():
             ON grants(therapeutic_area);
         CREATE INDEX IF NOT EXISTS idx_grants_has_trial_link
             ON grants(has_trial_link);
+
+        -- Sort/pagination indexes. The grids ORDER BY these columns on every page
+        -- and CSV export; without indexes each request is a full-table scan +
+        -- filesort that degrades silently as data accumulates.
+        -- Grants default ranking is ORDER BY (aicure_fit IS NULL), aicure_fit
+        -- DESC, ingested_at DESC (see api._grants_order_by). A plain composite
+        -- index can't satisfy it because of the leading (aicure_fit IS NULL)
+        -- expression (verified: SQLite falls back to a temp B-tree sort), so we
+        -- index that exact expression tuple. The default sort + every page and
+        -- CSV export then read straight from the index instead of full-scanning
+        -- and filesorting. (Expression indexes need SQLite >= 3.9; the deploy is
+        -- far newer — see the NULLS-LAST note in _grants_order_by.)
+        CREATE INDEX IF NOT EXISTS idx_grants_fit_rank
+            ON grants((aicure_fit IS NULL), aicure_fit DESC, ingested_at DESC);
+        -- ingested_at as a standalone recency key (digest windows, tiebreaks).
+        CREATE INDEX IF NOT EXISTS idx_grants_ingested_at
+            ON grants(ingested_at DESC);
+        -- Trials default: ORDER BY last_updated DESC (see /trials, /orgs trials).
+        CREATE INDEX IF NOT EXISTS idx_trials_last_updated
+            ON trials(last_updated DESC);
+        -- News default: ORDER BY published_at DESC (see /news, trial news).
+        CREATE INDEX IF NOT EXISTS idx_news_items_published_at
+            ON news_items(published_at DESC);
+        -- Correlated "latest news per trial" subqueries join on news_id; the
+        -- composite PK only indexes (trial_id, news_id), so reverse lookups by
+        -- news_id were unindexed.
+        CREATE INDEX IF NOT EXISTS idx_trial_news_links_news_id
+            ON trial_news_links(news_id);
     """)
     conn.commit()
     for alter in [
@@ -288,8 +320,13 @@ def _init_db():
         try:
             conn.execute(alter)
             conn.commit()
-        except Exception:
-            pass
+        except sqlite3.OperationalError as e:
+            # The ONLY expected error on a second run is re-adding a column that
+            # already exists. Anything else (disk full, corruption, locked DB)
+            # must surface, not leave a half-migrated schema that fails weirdly
+            # downstream.
+            if "duplicate column name" not in str(e).lower():
+                raise
     # Backfill first_seen for pre-existing rows (no-op once populated).
     try:
         conn.execute(
@@ -297,8 +334,12 @@ def _init_db():
             "WHERE first_seen IS NULL OR first_seen = ''"
         )
         conn.commit()
-    except Exception:
-        pass
+    except sqlite3.Error:
+        # Non-fatal to startup (only degrades "new this week" digest accuracy),
+        # but log it rather than swallowing silently.
+        print("[db] WARNING: first_seen backfill failed:")
+        import traceback
+        traceback.print_exc()
     conn.close()
 
 

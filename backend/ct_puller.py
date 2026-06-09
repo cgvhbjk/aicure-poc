@@ -4,6 +4,8 @@ import os
 import re
 from datetime import datetime
 from db import get_connection
+# Shared classifier / keyword-flag helper (was a divergent local copy here).
+from text_match import flag, classify_area
 
 SNAPSHOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "snapshots")
 os.makedirs(SNAPSHOT_DIR, exist_ok=True)
@@ -40,22 +42,12 @@ _DCT_KEYWORDS = [
 
 
 def classify_therapeutic_area(conditions_list, mesh_list, interventions_list):
+    """Join the trial's condition/mesh/intervention terms and classify via the
+    shared text_match.classify_area ladder (single source of truth)."""
     combined = " ".join(
         (conditions_list or []) + (mesh_list or []) + (interventions_list or [])
-    ).lower()
-    if any(k in combined for k in ["obes", "glp", "weight", "semaglutide", "tirzepatide",
-                                    "liraglutide", "dulaglutide", "bariatric", "metaboli"]):
-        return "Metabolic / GLP-1"
-    if "diabet" in combined or "insulin" in combined or "glycem" in combined or "glycaem" in combined:
-        return "Diabetes"
-    if any(k in combined for k in ["cardiac", "heart", "coronary", "atrial", "cardiovascular",
-                                    "hypertens", "blood pressure", "stroke", "arrhythm", "vascular"]):
-        return "Cardiovascular"
-    if any(k in combined for k in ["nash", "nafld", "fatty liver", "hepatic", "steatohep"]):
-        return "Liver / NASH"
-    if any(k in combined for k in ["kidney", "renal", "nephro", "ckd"]):
-        return "Renal"
-    return "Other"
+    )
+    return classify_area(combined)
 
 
 def _parse_eligibility(text):
@@ -75,11 +67,6 @@ def _parse_eligibility(text):
     if newline_idx != -1:
         exclusion = exclusion[newline_idx:].strip()
     return (inclusion[:2000] or None), (exclusion[:2000] or None)
-
-
-def _flag(text, keywords):
-    t = text.lower()
-    return 1 if any(k in t for k in keywords) else 0
 
 
 def parse_study(study, snapshot_path=None):
@@ -181,9 +168,9 @@ def parse_study(study, snapshot_path=None):
         " ".join(o.get("measure", "") for o in primary_outcomes),
         " ".join(o.get("measure", "") for o in secondary_outcomes),
     ])
-    epro_ecoa         = _flag(full_text, _EPRO_KEYWORDS)
-    digital_biomarkers = _flag(full_text, _DIGITAL_BIO_KEYWORDS)
-    dct_elements      = _flag(full_text, _DCT_KEYWORDS)
+    epro_ecoa         = int(flag(full_text, _EPRO_KEYWORDS))
+    digital_biomarkers = int(flag(full_text, _DIGITAL_BIO_KEYWORDS))
+    dct_elements      = int(flag(full_text, _DCT_KEYWORDS))
 
     return {
         "id":                  nct_id,

@@ -100,6 +100,10 @@ def run():
         backfill()
     except Exception as e:
         print(f"  score backfill ERROR: {e}")
+        traceback.print_exc()
+        # Record it so the run reports failure (exit 1) instead of a silent
+        # exit 0 with unscored rows the grids then can't rank.
+        failures.append(("Score backfill", str(e)))
 
     if failures:
         print("Failed steps:")

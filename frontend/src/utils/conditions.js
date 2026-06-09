@@ -1,5 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 
+// Must mirror the `source` values in backend/rss_parser.py RSS_FEEDS. Sources
+// missing here can't be filtered in the UI even though their items are ingested.
 const NEWS_SOURCES = [
   'Fierce Pharma', 'Endpoints News', 'PharmaVoice',
   'TrialSite News', 'BioPharma Dive', 'STAT News', 'BioSpace',
@@ -7,6 +9,12 @@ const NEWS_SOURCES = [
   'Google News — Obesity trial', 'Google News — Weight loss', 'Google News — T2D trial',
   'Google News — Heart failure', 'Google News — A-fib trial',
   'Google News — First patient', 'Google News — IND filing',
+  // Broader-net cardiometabolic / early-stage queries (added in rss_parser.py).
+  'Google News — Obesity initiated', 'Google News — Oral GLP-1',
+  'Google News — Diabetes DCT', 'Google News — Adherence trial',
+  'Google News — CV outcomes', 'Google News — NASH trial',
+  'Google News — Heart failure new', 'Google News — Weight protocol',
+  'Google News — Obesity sponsor', 'Google News — Tirzepatide CV',
 ]
 
 export const NEWS_FILTER_FIELDS = [

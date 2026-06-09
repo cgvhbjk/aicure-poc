@@ -1,5 +1,6 @@
 import sys
 import os
+import traceback
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -14,7 +15,6 @@ from grants.ada import pull_ada
 from grant_linker import run_grant_linker
 from db import get_connection
 
-FORCE = "--force" in sys.argv
 STALE_DAYS = 7  # re-run a connector if its data is older than this
 
 
@@ -43,22 +43,29 @@ steps = [
     ("Linker",        run_grant_linker,   None),
 ]
 
-threshold = datetime.utcnow() - timedelta(days=STALE_DAYS)
+def main():
+    force = "--force" in sys.argv
+    threshold = datetime.utcnow() - timedelta(days=STALE_DAYS)
 
-for name, fn, source_key in steps:
-    if not FORCE and source_key:
-        last = _last_ingested(source_key)
-        if last and last > threshold:
-            age = (datetime.utcnow() - last).days
-            print(f"{name}... skipped (last run {age}d ago, use --force to re-run)")
-            continue
-    print(f"{name}...")
-    try:
-        fn()
-    except Exception as e:
-        print(f"  ERROR: {e}")
+    for name, fn, source_key in steps:
+        if not force and source_key:
+            last = _last_ingested(source_key)
+            if last and last > threshold:
+                age = (datetime.utcnow() - last).days
+                print(f"{name}... skipped (last run {age}d ago, use --force to re-run)")
+                continue
+        print(f"{name}...")
+        try:
+            fn()
+        except Exception as e:
+            print(f"  ERROR: {e}")
+            traceback.print_exc()
 
-from score_backfill import backfill
-print("Scoring (aicure_fit)...")
-backfill()
-print("Done.")
+    from score_backfill import backfill
+    print("Scoring (aicure_fit)...")
+    backfill()
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()

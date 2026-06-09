@@ -17,7 +17,9 @@ SMTP (Gmail or any host):
     AICURE_SMTP_HOST/PORT   Default smtp.gmail.com : 587
 
 Common:
-    AICURE_EMAIL_TO         Comma-separated recipients (default: dufffires@gmail.com)
+    AICURE_EMAIL_TO         Comma-separated recipients. REQUIRED for resend/smtp
+                            delivery — sending raises if it is unset (there is no
+                            default inbox). Empty is fine for the preview backend.
 """
 
 import os
@@ -36,7 +38,6 @@ from scoring import (
     _trial_aicure_fit, _grant_aicure_fit, _fit_blurb,
 )
 
-DEFAULT_TO = "dufffires@gmail.com"
 PREVIEW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "email_previews")
 
 # Display order + human labels for news event types. Strongest near-term
@@ -70,7 +71,7 @@ EARLY_STAGE_TYPES = [
 # ── delivery ────────────────────────────────────────────────────────────────
 
 def _recipients():
-    raw = os.environ.get("AICURE_EMAIL_TO", DEFAULT_TO)
+    raw = os.environ.get("AICURE_EMAIL_TO", "")
     return [r.strip() for r in raw.split(",") if r.strip()]
 
 
@@ -92,6 +93,13 @@ def send_email(subject, html_body):
     """Deliver a digest via the configured backend. Returns a status string."""
     recipients = _recipients()
     backend = _backend()
+    if backend in ("resend", "smtp") and not recipients:
+        # Fail loudly rather than silently dropping a curated lead digest into
+        # the void (or, historically, a hardcoded personal inbox).
+        raise RuntimeError(
+            "AICURE_EMAIL_TO is unset — refusing to send a digest with no "
+            "recipients. Set AICURE_EMAIL_TO (comma-separated) before sending."
+        )
     if backend == "resend":
         return _send_resend(subject, html_body, recipients)
     if backend == "smtp":
@@ -147,8 +155,9 @@ def _send_preview(subject, html_body, recipients):
     os.makedirs(PREVIEW_DIR, exist_ok=True)
     stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(PREVIEW_DIR, f"digest_{stamp}.html")
+    to_label = ", ".join(recipients) if recipients else "(none configured)"
     with open(path, "w", encoding="utf-8") as f:
-        f.write(f"<!-- TO: {', '.join(recipients)} | SUBJECT: {subject} -->\n")
+        f.write(f"<!-- TO: {to_label} | SUBJECT: {subject} -->\n")
         f.write(html_body)
     msg = f"[emailer] No backend configured — preview written to {path}"
     print(msg)

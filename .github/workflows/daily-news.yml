@@ -1,5 +1,15 @@
 name: Daily news digest
 
+# Least-privilege: this workflow only calls an external HTTP endpoint, so the
+# GITHUB_TOKEN needs no scopes at all.
+permissions: {}
+
+# Single-flight: a scheduled fire and a manual run (or two crons overlapping a
+# slow Render cold-start) must not both refresh+send and double up the digest.
+concurrency:
+  group: daily-news-digest
+  cancel-in-progress: false
+
 # Drives the daily news digest from OUTSIDE the app, because the in-app
 # APScheduler can't fire while the free-tier Render service is asleep. This
 # request wakes the service, refreshes news, builds the digest, and emails it.

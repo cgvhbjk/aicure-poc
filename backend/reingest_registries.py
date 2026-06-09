@@ -1,5 +1,6 @@
 import sys
 import os
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -17,14 +18,20 @@ steps = [
     ("CRIS", pull_all_cris),
 ]
 
-for i, (name, fn) in enumerate(steps, 1):
-    print(f"Step {i}/{len(steps)} — {name}...")
-    try:
-        fn()
-    except Exception as e:
-        print(f"  ERROR in {name}: {e} — continuing")
+def main():
+    for i, (name, fn) in enumerate(steps, 1):
+        print(f"Step {i}/{len(steps)} — {name}...")
+        try:
+            fn()
+        except Exception as e:
+            print(f"  ERROR in {name}: {e} — continuing")
+            traceback.print_exc()
 
-from score_backfill import backfill
-print("Scoring (aicure_fit)...")
-backfill()
-print("Done.")
+    from score_backfill import backfill
+    print("Scoring (aicure_fit)...")
+    backfill()
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()

@@ -156,6 +156,7 @@ export default function NewsTable({
   onGridStateChange,
 }) {
   const gridRef = useRef(null)
+  const disposeGridListenersRef = useRef(null)
   const [rowData, setRowData] = useState([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
@@ -180,8 +181,10 @@ export default function NewsTable({
 
   const handleGridReady = useCallback((params) => {
     onGridReadyProp?.(params.api)
-    attachGridStateListeners(params.api, onGridStateChange)
+    disposeGridListenersRef.current = attachGridStateListeners(params.api, onGridStateChange)
   }, [onGridReadyProp, onGridStateChange])
+
+  useEffect(() => () => { disposeGridListenersRef.current?.() }, [])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>

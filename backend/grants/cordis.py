@@ -12,6 +12,7 @@ from grant_utils import (
     extract_phase, extract_conditions, extract_interventions,
 )
 from registry_utils import extract_nct
+from db import get_connection
 
 SEARCH_TERMS = [
     "obesity", "GLP-1", "semaglutide", "tirzepatide", "type 2 diabetes",
@@ -62,6 +63,7 @@ def pull_cordis():
 
     seen_ids: set = set()
     total_inserted = 0
+    conn = get_connection()  # one connection for the whole pull; commit per page
 
     for term in SEARCH_TERMS:
         q_term = f'"{term}"' if ('-' in term or ' ' in term) else term
@@ -142,11 +144,12 @@ def pull_cordis():
                         "linked_trial_id": nct,
                         "has_trial_link": 1 if nct else 0,
                     }
-                    upsert_grant(record)
+                    upsert_grant(record, conn)
                     total_inserted += 1
                 except Exception as e:
                     print(f"  [WARN] CORDIS record error: {e}")
 
+            conn.commit()
             if len(rows) < 100:
                 break
 
@@ -154,4 +157,5 @@ def pull_cordis():
 
         time.sleep(1.0)
 
+    conn.close()
     print(f"  CORDIS: {total_inserted} grants inserted")

@@ -56,33 +56,48 @@ def cleanup_old_news():
     """Delete non-announcement news older than 7 days and repair has_news flags."""
     conn = get_connection()
     cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-    conn.execute(
-        "DELETE FROM trial_news_links WHERE news_id IN ("
-        "  SELECT id FROM news_items WHERE is_trial_announcement = 0 AND published_at < ?"
-        ")",
-        (cutoff,),
-    )
-    deleted = conn.execute(
-        "DELETE FROM news_items WHERE is_trial_announcement = 0 AND published_at < ?",
-        (cutoff,),
-    ).rowcount
-    # Clear has_news on trials that no longer have any linked news
-    conn.execute(
-        "UPDATE trials SET has_news = 0 WHERE has_news = 1 AND id NOT IN ("
-        "  SELECT DISTINCT trial_id FROM trial_news_links WHERE trial_id IS NOT NULL"
-        ")"
-    )
-    conn.commit()
-    conn.close()
+    try:
+        # One transaction: dropping the links, dropping the news, and repairing
+        # the denormalized has_news flag must all land or none — a partial run
+        # leaves orphaned links / stale has_news. try/finally also guarantees the
+        # connection is closed (a leaked fd contributes to "database is locked").
+        conn.execute("BEGIN")
+        conn.execute(
+            "DELETE FROM trial_news_links WHERE news_id IN ("
+            "  SELECT id FROM news_items WHERE is_trial_announcement = 0 AND published_at < ?"
+            ")",
+            (cutoff,),
+        )
+        deleted = conn.execute(
+            "DELETE FROM news_items WHERE is_trial_announcement = 0 AND published_at < ?",
+            (cutoff,),
+        ).rowcount
+        # Clear has_news on trials that no longer have any linked news
+        conn.execute(
+            "UPDATE trials SET has_news = 0 WHERE has_news = 1 AND id NOT IN ("
+            "  SELECT DISTINCT trial_id FROM trial_news_links WHERE trial_id IS NOT NULL"
+            ")"
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     print(f"[cleanup] Removed {deleted} old non-announcement news items")
     return deleted
 
 
 def run_daily_news():
-    """Refresh RSS feeds, re-link to trials, then clean up stale items."""
+    """Refresh RSS feeds, re-link to trials, then clean up stale items.
+
+    Returns True on a completed refresh, False if another refresh already held
+    the lock (skipped). Re-raises on actual failure so the in-app scheduler
+    records a job error and the cron-driven send path (run_daily_news_and_send)
+    aborts instead of emailing a stale/empty digest."""
     if not _news_refresh_lock.acquire(blocking=False):
         print("[daily-news] Already running, skipping")
-        return
+        return False
     try:
         from rss_parser import parse_all_feeds
         from linker import run_linker
@@ -91,10 +106,14 @@ def run_daily_news():
         run_linker()
         cleanup_old_news()
         print(f"[daily-news] Done at {datetime.utcnow().isoformat()}")
-    except Exception as e:
-        print(f"[daily-news] ERROR: {e}")
+        return True
+    except Exception:
+        # Log the full traceback for the operator, then re-raise: a refresh that
+        # failed must NOT silently fall through to sending a stale digest.
+        print("[daily-news] ERROR during refresh:")
         import traceback
         traceback.print_exc()
+        raise
     finally:
         _news_refresh_lock.release()
 
@@ -105,9 +124,12 @@ def run_daily_news_and_send(refresh: bool = True):
     run_daily_news() only refreshes the DB and never emailed anything. Intended
     to be driven by an external daily cron (see .github/workflows) so delivery
     doesn't depend on the in-app scheduler, which can't fire while a free-tier
-    Render service is asleep. Returns the emailer status string."""
+    Render service is asleep. Returns the emailer status string.
+
+    Raises if the refresh fails, so a broken ingest surfaces as an error (HTTP
+    500 / non-200 to the cron) instead of silently sending a stale/empty digest."""
     if refresh:
-        run_daily_news()
+        run_daily_news()  # raises on failure -> caller sees the error, no send
     import emailer
     return emailer.send_daily_news_digest()
 
@@ -120,8 +142,13 @@ def run_daily_rescore():
     try:
         from score_backfill import backfill
         backfill()
-    except Exception as e:
-        print(f"[scheduler] daily rescore ERROR: {e}")
+    except Exception:
+        # Print the full traceback (not just str(e)) and re-raise so APScheduler
+        # records the job as failed rather than swallowing it.
+        print("[scheduler] daily rescore ERROR:")
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 @asynccontextmanager
@@ -139,10 +166,19 @@ app = FastAPI(title="AiCure POC API", lifespan=lifespan)
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# CORS. The SPA is served same-origin from this service (StaticFiles at "/"), so
+# production needs no CORS at all; the wildcard default exists only for split-origin
+# dev (e.g. the Vite dev server on another port). Credentials are OFF: auth here is
+# a header key (X-Admin-Key), not a cookie, so nothing rides along automatically —
+# and "*" + credentials would make Starlette reflect any Origin, trusting every site.
+# Lock down in production by setting AICURE_CORS_ORIGINS=https://app.example.com[,...].
+_cors_origins = [
+    o.strip() for o in os.environ.get("AICURE_CORS_ORIGINS", "*").split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -565,8 +601,8 @@ def patch_org(org_id: str, body: OrgUpdate):
 
     updates = {k: v for k, v in body.model_dump().items() if v is not None and k in _PATCHABLE_ORG_FIELDS}
     if not updates:
-        conn.close()
         row = conn.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchone()
+        conn.close()
         return row_to_dict(row)
 
     set_clauses = ", ".join(f"{k} = ?" for k in updates)
