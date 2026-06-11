@@ -22,6 +22,47 @@ const api = axios.create({
   },
 })
 
+// ── Request progress (drives the top ProgressBar) ────────────────────────────
+// Tiny pub/sub fed by the axios interceptors below: `active` while any request
+// is in flight; `fraction` (0..1) when the current download reports a usable
+// total. Gzipped API responses usually hide Content-Length from XHR progress
+// events, so the bar falls back to an indeterminate sweep in that case.
+const progressListeners = new Set()
+let _inflight = 0
+let _fraction = null
+
+const emitProgress = () => {
+  const snapshot = { active: _inflight > 0, fraction: _fraction }
+  progressListeners.forEach((fn) => fn(snapshot))
+}
+
+export const onRequestProgress = (fn) => {
+  progressListeners.add(fn)
+  fn({ active: _inflight > 0, fraction: _fraction })
+  return () => progressListeners.delete(fn)
+}
+
+api.interceptors.request.use((config) => {
+  _inflight += 1
+  _fraction = null
+  config.onDownloadProgress = (e) => {
+    if (e.total) {
+      _fraction = e.loaded / e.total
+      emitProgress()
+    }
+  }
+  emitProgress()
+  return config
+})
+
+const _settle = (ok) => (value) => {
+  _inflight = Math.max(0, _inflight - 1)
+  if (_inflight === 0) _fraction = null
+  emitProgress()
+  return ok ? value : Promise.reject(value)
+}
+api.interceptors.response.use(_settle(true), _settle(false))
+
 export const getTrials = (params) => api.get('/trials', { params })
 export const getTrial = (trialId) => api.get(`/trials/${trialId}`)
 export const getNews = (params) => api.get('/news', { params })

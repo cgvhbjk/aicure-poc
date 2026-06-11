@@ -2,6 +2,7 @@ import React, { useState, useRef, useMemo } from 'react'
 import { AgGridReact } from 'ag-grid-react'
 import { getOrgs } from '../api'
 import OrgDetailPanel from './OrgDetailPanel'
+import { GRID_LOADING_TEMPLATE, GRID_EMPTY_TEMPLATE } from '../utils/gridUi'
 
 // Columns the backend can ORDER BY (mirrors ORG_SORTABLE_COLUMNS in api.py).
 const SORTABLE_FIELDS = new Set(['canonical_name', 'org_type', 'trial_count'])
@@ -134,6 +135,8 @@ export default function OrgsTable({ filters, filterOpen, onToggleFilter, onSelec
             rowSelection="single"
             onRowClicked={(e) => { if (e.data) setSelectedOrg(e.data) }}
             animateRows
+            overlayLoadingTemplate={GRID_LOADING_TEMPLATE}
+            overlayNoRowsTemplate={GRID_EMPTY_TEMPLATE}
           />
         </div>
       </div>

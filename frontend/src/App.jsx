@@ -8,6 +8,7 @@ import UploadModal from './components/UploadModal'
 import MergeAuditView from './components/MergeAuditView'
 import FundingTable from './components/FundingTable'
 import GrantDetailPanel from './components/GrantDetailPanel'
+import ProgressBar from './components/ProgressBar'
 import { compileConditions, compileNewsConditions, compileFundingConditions } from './utils/conditions'
 import { getStats, getMergeStats, getGrantStats } from './api'
 import './App.css'
@@ -155,6 +156,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <ProgressBar />
       <div className="stats-bar">
         <span className="app-title">AiCure Clinical Intelligence</span>
         {stats ? (

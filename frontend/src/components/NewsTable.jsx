@@ -5,6 +5,7 @@ import FieldsPanel from './FieldsPanel'
 import FilterBar from './FilterBar'
 import { NEWS_FILTER_FIELDS } from '../utils/conditions'
 import { attachGridStateListeners } from '../utils/gridEvents'
+import { GRID_LOADING_TEMPLATE, GRID_EMPTY_TEMPLATE } from '../utils/gridUi'
 
 // Mirror api.js: VITE_API_URL override wins, else same-origin in prod / the dev
 // backend. Used for the direct-link CSV export below.
@@ -274,6 +275,8 @@ export default function NewsTable({
             enableCellTextSelection
             tooltipShowDelay={500}
             animateRows
+            overlayLoadingTemplate={GRID_LOADING_TEMPLATE}
+            overlayNoRowsTemplate={GRID_EMPTY_TEMPLATE}
           />
         </div>
 
