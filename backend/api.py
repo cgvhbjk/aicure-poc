@@ -90,6 +90,36 @@ _TRIAL_GRID_COLS = _grid_columns("trials", {
 _GRANT_GRID_COLS = _grid_columns("grants", {"abstract"})
 
 
+def _order_by_clause(sort, direction, sortable, default_col, tiebreak, prefix=""):
+    """Shared ORDER BY builder for the paginated grids. The sort column is
+    whitelisted against `sortable` (anything else falls back to `default_col`,
+    so ?sort= can't inject SQL). `(col IS NULL)` keeps NULLs last without the
+    NULLS LAST syntax, which only exists on SQLite >= 3.30. `tiebreak` should
+    make the ordering (near-)total so LIMIT/OFFSET pages don't shuffle rows
+    between requests when the sort key has duplicates."""
+    col = sort if sort in sortable else default_col
+    d = "ASC" if (direction or "desc").lower() == "asc" else "DESC"
+    qcol = f"{prefix}{col}"
+    return f"ORDER BY ({qcol} IS NULL), {qcol} {d}, {tiebreak}"
+
+
+# Columns the grids may sort on server-side (mirrored by SORTABLE_FIELDS in the
+# corresponding frontend table components).
+TRIAL_SORTABLE_COLUMNS = {
+    "aicure_fit", "has_news", "therapeutic_area", "title_brief", "status",
+    "phase", "sponsor", "sponsor_type", "lead_country", "enrollment",
+    "start_date", "primary_completion", "study_completion", "first_posted",
+    "last_updated", "id", "study_type", "num_arms", "num_sites", "pi_name",
+    "is_pediatric", "epro_ecoa", "digital_biomarkers", "dct_elements",
+    "ingested_at",
+}
+NEWS_SORTABLE_COLUMNS = {
+    "published_at", "source", "title", "drug_mentioned", "phase_mentioned",
+    "sponsor_mentioned", "is_trial_announcement", "is_trial_results", "trial_id",
+}
+ORG_SORTABLE_COLUMNS = {"canonical_name", "org_type", "trial_count"}
+
+
 def cleanup_old_news():
     """Delete non-announcement news older than 7 days and repair has_news flags."""
     conn = get_connection()
@@ -241,28 +271,11 @@ def row_to_dict(row):
     return dict(row)
 
 
-@app.get("/trials")
-def get_trials(
-    q: Optional[str] = None,
-    status: Optional[List[str]] = Query(default=None),
-    phase: Optional[List[str]] = Query(default=None),
-    therapeutic_area: Optional[List[str]] = Query(default=None),
-    country: Optional[List[str]] = Query(default=None),
-    has_news: Optional[bool] = None,
-    has_euct_id: Optional[bool] = None,
-    registry: Optional[List[str]] = Query(default=None),
-    min_enrollment: Optional[int] = None,
-    max_enrollment: Optional[int] = None,
-    start_date_from: Optional[str] = None,
-    start_date_to: Optional[str] = None,
-    completion_date_from: Optional[str] = None,
-    completion_date_to: Optional[str] = None,
-    page: int = 1,
-    page_size: int = 100,
-):
-    page_size = min(page_size, 100000)
-    conn = get_connection()
-
+def _trials_where(q, status, phase, therapeutic_area, country, has_news,
+                  has_euct_id, registry, sponsor, sponsor_not, min_enrollment,
+                  max_enrollment, start_date_from, start_date_to,
+                  completion_date_from, completion_date_to):
+    """Build the shared WHERE clause for the trials list + export endpoints."""
     where_clauses = []
     params = []
 
@@ -314,6 +327,18 @@ def get_trials(
         where_clauses.append(f"({reg_clauses})")
         params.extend([f"%{r}%" for r in registry])
 
+    # Sponsor text match. Previously the FilterBar's sponsor condition was
+    # applied client-side via an AG Grid filter model, which only worked while
+    # the grid held every row; with server-side pagination it has to be a real
+    # query param.
+    if sponsor:
+        where_clauses.append("LOWER(sponsor) LIKE ? ESCAPE '\\'")
+        params.append(_like_pattern(sponsor))
+
+    if sponsor_not:
+        where_clauses.append("(sponsor IS NULL OR LOWER(sponsor) NOT LIKE ? ESCAPE '\\')")
+        params.append(_like_pattern(sponsor_not))
+
     if min_enrollment is not None:
         where_clauses.append("CAST(enrollment AS INTEGER) >= ?")
         params.append(min_enrollment)
@@ -339,12 +364,47 @@ def get_trials(
         params.append(completion_date_to)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    return where_sql, params
+
+
+@app.get("/trials")
+def get_trials(
+    q: Optional[str] = None,
+    status: Optional[List[str]] = Query(default=None),
+    phase: Optional[List[str]] = Query(default=None),
+    therapeutic_area: Optional[List[str]] = Query(default=None),
+    country: Optional[List[str]] = Query(default=None),
+    has_news: Optional[bool] = None,
+    has_euct_id: Optional[bool] = None,
+    registry: Optional[List[str]] = Query(default=None),
+    sponsor: Optional[str] = None,
+    sponsor_not: Optional[str] = None,
+    min_enrollment: Optional[int] = None,
+    max_enrollment: Optional[int] = None,
+    start_date_from: Optional[str] = None,
+    start_date_to: Optional[str] = None,
+    completion_date_from: Optional[str] = None,
+    completion_date_to: Optional[str] = None,
+    sort: Optional[str] = "last_updated",
+    sort_dir: str = Query("desc", alias="dir"),
+    page: int = 1,
+    page_size: int = 100,
+):
+    page_size = min(page_size, 500)
+    conn = get_connection()
+
+    where_sql, params = _trials_where(
+        q, status, phase, therapeutic_area, country, has_news, has_euct_id,
+        registry, sponsor, sponsor_not, min_enrollment, max_enrollment,
+        start_date_from, start_date_to, completion_date_from, completion_date_to)
 
     total = conn.execute(f"SELECT COUNT(*) FROM trials {where_sql}", params).fetchone()[0]
     offset = (page - 1) * page_size
+    order_by = _order_by_clause(sort, sort_dir, TRIAL_SORTABLE_COLUMNS,
+                                "last_updated", "id")
     rows = conn.execute(
         f"SELECT {_TRIAL_GRID_COLS} FROM trials {where_sql} "
-        f"ORDER BY last_updated DESC LIMIT ? OFFSET ?",
+        f"{order_by} LIMIT ? OFFSET ?",
         params + [page_size, offset],
     ).fetchall()
 
@@ -367,6 +427,61 @@ def get_trials(
     return {"total": total, "page": page, "results": results}
 
 
+# (field, CSV header) — mirrors the Trials grid defaults plus contact fields.
+_TRIAL_EXPORT_COLUMNS = [
+    ("aicure_fit", "Fit"), ("therapeutic_area", "Area"),
+    ("title_brief", "Trial Title"), ("status", "Status"), ("phase", "Phase"),
+    ("sponsor", "Sponsor"), ("sponsor_type", "Sponsor Type"),
+    ("lead_country", "Country"), ("enrollment", "Enrollment"),
+    ("start_date", "Start"), ("primary_completion", "Primary Completion"),
+    ("id", "NCT ID"), ("interventions", "Interventions"),
+    ("conditions", "Conditions"), ("registry_sources", "Registries"),
+    ("pi_name", "PI"), ("pi_email", "PI Email"), ("source_url", "Source URL"),
+]
+
+
+# NOTE: must be registered before GET /trials/{trial_id}, or "export" would be
+# captured as a trial id.
+@app.get("/trials/export")
+def export_trials(
+    q: Optional[str] = None,
+    status: Optional[List[str]] = Query(default=None),
+    phase: Optional[List[str]] = Query(default=None),
+    therapeutic_area: Optional[List[str]] = Query(default=None),
+    country: Optional[List[str]] = Query(default=None),
+    has_news: Optional[bool] = None,
+    has_euct_id: Optional[bool] = None,
+    registry: Optional[List[str]] = Query(default=None),
+    sponsor: Optional[str] = None,
+    sponsor_not: Optional[str] = None,
+    min_enrollment: Optional[int] = None,
+    max_enrollment: Optional[int] = None,
+    start_date_from: Optional[str] = None,
+    start_date_to: Optional[str] = None,
+    completion_date_from: Optional[str] = None,
+    completion_date_to: Optional[str] = None,
+    sort: Optional[str] = "last_updated",
+    sort_dir: str = Query("desc", alias="dir"),
+):
+    """Stream the FULL filtered trial set as CSV (honors the grid's filters +
+    sort). Replaces the client-side export, which only covered loaded rows
+    once the grid moved to the infinite row model."""
+    where_sql, params = _trials_where(
+        q, status, phase, therapeutic_area, country, has_news, has_euct_id,
+        registry, sponsor, sponsor_not, min_enrollment, max_enrollment,
+        start_date_from, start_date_to, completion_date_from, completion_date_to)
+    order_by = _order_by_clause(sort, sort_dir, TRIAL_SORTABLE_COLUMNS,
+                                "last_updated", "id")
+
+    def postprocess(t):
+        if t.get("aicure_fit") is None:
+            t["aicure_fit"] = score_trial(t)
+
+    return _csv_stream(
+        "trials", _TRIAL_EXPORT_COLUMNS,
+        f"SELECT * FROM trials {where_sql} {order_by}", params, postprocess)
+
+
 @app.get("/trials/{trial_id}")
 def get_trial(trial_id: str):
     """Full trial record, including the fat text fields (summary, eligibility
@@ -382,27 +497,11 @@ def get_trial(trial_id: str):
     return t
 
 
-@app.get("/news")
-def get_news(
-    q: Optional[str] = None,
-    source: Optional[List[str]] = Query(default=None),
-    linked_only: Optional[bool] = None,
-    is_trial_announcement: Optional[bool] = None,
-    is_trial_results: Optional[bool] = None,
-    published_at_from: Optional[str] = None,
-    published_at_to: Optional[str] = None,
-    drug_mentioned: Optional[str] = None,
-    drug_mentioned_not: Optional[str] = None,
-    phase_mentioned: Optional[str] = None,
-    phase_mentioned_not: Optional[str] = None,
-    sponsor_mentioned: Optional[str] = None,
-    sponsor_mentioned_not: Optional[str] = None,
-    page: int = 1,
-    page_size: int = 100,
-):
-    page_size = min(page_size, 100000)
-    conn = get_connection()
-
+def _news_where(q, source, linked_only, is_trial_announcement, is_trial_results,
+                published_at_from, published_at_to, drug_mentioned,
+                drug_mentioned_not, phase_mentioned, phase_mentioned_not,
+                sponsor_mentioned, sponsor_mentioned_not):
+    """Build the shared WHERE clause for the news list + export endpoints."""
     where_clauses = []
     params = []
 
@@ -429,13 +528,15 @@ def get_news(
         where_clauses.append("ni.is_trial_results = ?")
         params.append(1 if is_trial_results else 0)
 
+    # Bare-date string bounds instead of DATE(col) — same rationale and
+    # mixed-format safety as the grants award_date filter (see _iso_day).
     if published_at_from:
-        where_clauses.append("DATE(ni.published_at) >= DATE(?)")
-        params.append(published_at_from)
+        where_clauses.append("ni.published_at >= ?")
+        params.append(_iso_day(published_at_from))
 
     if published_at_to:
-        where_clauses.append("DATE(ni.published_at) <= DATE(?)")
-        params.append(published_at_to)
+        where_clauses.append("ni.published_at > '' AND ni.published_at < ?")
+        params.append(_iso_day(published_at_to, plus_days=1))
 
     if drug_mentioned:
         where_clauses.append("LOWER(ni.drug_mentioned) LIKE ? ESCAPE '\\'")
@@ -462,34 +563,113 @@ def get_news(
         params.append(_like_pattern(sponsor_mentioned_not))
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    return where_sql, params
+
+
+# The list + export endpoints share this SELECT (joined trial context + best
+# match method per item).
+_NEWS_SELECT = """
+    SELECT ni.*,
+           (SELECT match_method FROM trial_news_links
+            WHERE news_id = ni.id
+            ORDER BY match_method DESC LIMIT 1) AS match_method,
+           t.title_brief        AS trial_title,
+           t.status             AS trial_status,
+           t.phase              AS trial_phase,
+           t.therapeutic_area   AS trial_therapeutic_area,
+           t.sponsor            AS trial_sponsor
+    FROM news_items ni
+    LEFT JOIN trials t ON ni.trial_id = t.id
+"""
+
+
+@app.get("/news")
+def get_news(
+    q: Optional[str] = None,
+    source: Optional[List[str]] = Query(default=None),
+    linked_only: Optional[bool] = None,
+    is_trial_announcement: Optional[bool] = None,
+    is_trial_results: Optional[bool] = None,
+    published_at_from: Optional[str] = None,
+    published_at_to: Optional[str] = None,
+    drug_mentioned: Optional[str] = None,
+    drug_mentioned_not: Optional[str] = None,
+    phase_mentioned: Optional[str] = None,
+    phase_mentioned_not: Optional[str] = None,
+    sponsor_mentioned: Optional[str] = None,
+    sponsor_mentioned_not: Optional[str] = None,
+    sort: Optional[str] = "published_at",
+    sort_dir: str = Query("desc", alias="dir"),
+    page: int = 1,
+    page_size: int = 100,
+):
+    page_size = min(page_size, 500)
+    conn = get_connection()
+
+    where_sql, params = _news_where(
+        q, source, linked_only, is_trial_announcement, is_trial_results,
+        published_at_from, published_at_to, drug_mentioned, drug_mentioned_not,
+        phase_mentioned, phase_mentioned_not, sponsor_mentioned,
+        sponsor_mentioned_not)
 
     total = conn.execute(
         f"SELECT COUNT(*) FROM news_items ni {where_sql}", params
     ).fetchone()[0]
 
     offset = (page - 1) * page_size
+    order_by = _order_by_clause(sort, sort_dir, NEWS_SORTABLE_COLUMNS,
+                                "published_at", "ni.id DESC", prefix="ni.")
     rows = conn.execute(
-        f"""
-        SELECT ni.*,
-               (SELECT match_method FROM trial_news_links
-                WHERE news_id = ni.id
-                ORDER BY match_method DESC LIMIT 1) AS match_method,
-               t.title_brief        AS trial_title,
-               t.status             AS trial_status,
-               t.phase              AS trial_phase,
-               t.therapeutic_area   AS trial_therapeutic_area,
-               t.sponsor            AS trial_sponsor
-        FROM news_items ni
-        LEFT JOIN trials t ON ni.trial_id = t.id
-        {where_sql}
-        ORDER BY ni.published_at DESC
-        LIMIT ? OFFSET ?
-        """,
+        f"{_NEWS_SELECT} {where_sql} {order_by} LIMIT ? OFFSET ?",
         params + [page_size, offset],
     ).fetchall()
 
     conn.close()
     return {"total": total, "results": [row_to_dict(r) for r in rows]}
+
+
+# (field, CSV header) — mirrors the News grid.
+_NEWS_EXPORT_COLUMNS = [
+    ("source", "Source"), ("title", "Title"), ("url", "URL"),
+    ("published_at", "Published"), ("body_snippet", "Snippet"),
+    ("drug_mentioned", "Drug"), ("phase_mentioned", "Phase"),
+    ("sponsor_mentioned", "Sponsor"), ("nct_ids_found", "NCTs in Article"),
+    ("trial_id", "Linked NCT"), ("trial_title", "Linked Trial Title"),
+    ("trial_status", "Trial Status"), ("trial_therapeutic_area", "Trial Area"),
+    ("match_method", "Match"),
+]
+
+
+@app.get("/news/export")
+def export_news(
+    q: Optional[str] = None,
+    source: Optional[List[str]] = Query(default=None),
+    linked_only: Optional[bool] = None,
+    is_trial_announcement: Optional[bool] = None,
+    is_trial_results: Optional[bool] = None,
+    published_at_from: Optional[str] = None,
+    published_at_to: Optional[str] = None,
+    drug_mentioned: Optional[str] = None,
+    drug_mentioned_not: Optional[str] = None,
+    phase_mentioned: Optional[str] = None,
+    phase_mentioned_not: Optional[str] = None,
+    sponsor_mentioned: Optional[str] = None,
+    sponsor_mentioned_not: Optional[str] = None,
+    sort: Optional[str] = "published_at",
+    sort_dir: str = Query("desc", alias="dir"),
+):
+    """Stream the FULL filtered news set as CSV (honors the grid's filters +
+    sort); see export_trials for why this is server-side."""
+    where_sql, params = _news_where(
+        q, source, linked_only, is_trial_announcement, is_trial_results,
+        published_at_from, published_at_to, drug_mentioned, drug_mentioned_not,
+        phase_mentioned, phase_mentioned_not, sponsor_mentioned,
+        sponsor_mentioned_not)
+    order_by = _order_by_clause(sort, sort_dir, NEWS_SORTABLE_COLUMNS,
+                                "published_at", "ni.id DESC", prefix="ni.")
+    return _csv_stream(
+        "news", _NEWS_EXPORT_COLUMNS,
+        f"{_NEWS_SELECT} {where_sql} {order_by}", params)
 
 
 @app.get("/trials/{trial_id}/registries")
@@ -559,10 +739,12 @@ def get_orgs(
     therapeutic_focus: Optional[List[str]] = Query(default=None),
     white_label: Optional[str] = None,
     has_trials: Optional[bool] = None,
+    sort: Optional[str] = "trial_count",
+    sort_dir: str = Query("desc", alias="dir"),
     page: int = 1,
     page_size: int = 100,
 ):
-    page_size = min(page_size, 100000)
+    page_size = min(page_size, 500)
     conn = get_connection()
 
     where_clauses = []
@@ -595,8 +777,10 @@ def get_orgs(
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     total = conn.execute(f"SELECT COUNT(*) FROM organizations o {where_sql}", params).fetchone()[0]
     offset = (page - 1) * page_size
+    order_by = _order_by_clause(sort, sort_dir, ORG_SORTABLE_COLUMNS,
+                                "trial_count", "o.canonical_name", prefix="o.")
     rows = conn.execute(
-        f"SELECT o.* FROM organizations o {where_sql} ORDER BY o.trial_count DESC, o.canonical_name LIMIT ? OFFSET ?",
+        f"SELECT o.* FROM organizations o {where_sql} {order_by} LIMIT ? OFFSET ?",
         params + [page_size, offset],
     ).fetchall()
 
@@ -1486,11 +1670,10 @@ def _grants_where(q, source, therapeutic_area, status, country, country_q,
 def _grants_order_by(sort, sort_dir):
     """ORDER BY clause for grants. aicure_fit is a real (precomputed) column, so
     the default fit ranking sorts in SQL like any other; unknown columns fall
-    back to it. `(col IS NULL)` keeps NULLs last without the `NULLS LAST` syntax,
-    which only exists on SQLite >= 3.30 (the deploy image may be older)."""
-    col = sort if (sort in GRANT_SORTABLE_COLUMNS or sort == "aicure_fit") else "aicure_fit"
-    direction = "ASC" if (sort_dir or "desc").lower() == "asc" else "DESC"
-    return f"ORDER BY ({col} IS NULL), {col} {direction}, ingested_at DESC"
+    back to it."""
+    return _order_by_clause(sort, sort_dir,
+                            GRANT_SORTABLE_COLUMNS | {"aicure_fit"},
+                            "aicure_fit", "ingested_at DESC")
 
 
 @app.get("/grants")
@@ -1518,7 +1701,7 @@ def get_grants(
     page: int = 1,
     page_size: int = 100,
 ):
-    page_size = min(page_size, 100000)
+    page_size = min(page_size, 500)
     conn = get_connection()
 
     where_sql, params = _grants_where(
@@ -1583,6 +1766,43 @@ def _csv_safe(value):
     return value
 
 
+def _csv_stream(name, columns, row_query, params, postprocess=None):
+    """Stream `row_query` results as a CSV download. `columns` is a list of
+    (row field, CSV header) pairs; `postprocess` may mutate each row dict
+    before it is written (e.g. on-the-fly scoring)."""
+    def rows_iter():
+        # check_same_thread=False: Starlette iterates this generator across
+        # anyio worker threads, so the connection may be created on one thread
+        # and used on another. Only one thread touches it at a time here.
+        conn = get_connection(check_same_thread=False)
+        try:
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+
+            def flush():
+                data = buf.getvalue()
+                buf.seek(0); buf.truncate(0)
+                return data
+
+            writer.writerow([h for _, h in columns])
+            yield flush()
+            for r in conn.execute(row_query, params):
+                d = row_to_dict(r)
+                if postprocess:
+                    postprocess(d)
+                writer.writerow([_csv_safe(d.get(field)) for field, _ in columns])
+                yield flush()
+        finally:
+            conn.close()
+
+    filename = f"{name}_export_{datetime.utcnow():%Y%m%d}.csv"
+    return StreamingResponse(
+        rows_iter(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # Declared before /grants/{grant_id} so "export" isn't captured as a grant id.
 @app.get("/grants/export")
 def export_grants(
@@ -1616,40 +1836,14 @@ def export_grants(
         research_type, agency_division, fiscal_year_min, fiscal_year_max,
         award_date_from, award_date_to)
 
-    def rows_iter():
-        # check_same_thread=False: Starlette iterates this generator across anyio
-        # worker threads, so the connection may be created on one thread and
-        # used on another. Only one thread touches it at a time here.
-        conn = get_connection(check_same_thread=False)
-        try:
-            buf = io.StringIO()
-            writer = csv.writer(buf)
+    def postprocess(g):
+        if g.get("aicure_fit") is None:
+            g["aicure_fit"] = score_grant(g)
 
-            def flush():
-                data = buf.getvalue()
-                buf.seek(0); buf.truncate(0)
-                return data
-
-            writer.writerow([h for _, h in _GRANT_EXPORT_COLUMNS])
-            yield flush()
-            for r in conn.execute(
-                f"SELECT * FROM grants {where_sql} {_grants_order_by(sort, sort_dir)}",
-                params,
-            ):
-                g = row_to_dict(r)
-                if g.get("aicure_fit") is None:
-                    g["aicure_fit"] = score_grant(g)
-                writer.writerow([_csv_safe(g.get(field)) for field, _ in _GRANT_EXPORT_COLUMNS])
-                yield flush()
-        finally:
-            conn.close()
-
-    filename = f"grants_export_{datetime.utcnow():%Y%m%d}.csv"
-    return StreamingResponse(
-        rows_iter(),
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return _csv_stream(
+        "grants", _GRANT_EXPORT_COLUMNS,
+        f"SELECT * FROM grants {where_sql} {_grants_order_by(sort, sort_dir)}",
+        params, postprocess)
 
 
 @app.get("/grants/{grant_id}/trials")

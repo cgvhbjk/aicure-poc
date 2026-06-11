@@ -1,7 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useMemo } from 'react'
 import { AgGridReact } from 'ag-grid-react'
 import { getOrgs } from '../api'
 import OrgDetailPanel from './OrgDetailPanel'
+
+// Columns the backend can ORDER BY (mirrors ORG_SORTABLE_COLUMNS in api.py).
+const SORTABLE_FIELDS = new Set(['canonical_name', 'org_type', 'trial_count'])
 
 const ORG_TYPE_STYLES = {
   PHARMA:         { background: '#dbeafe', color: '#1e40af' },
@@ -49,7 +52,10 @@ function TruncatedText({ value }) {
   return <span title={s}>{s.slice(0, 120)}{s.length > 120 ? '…' : ''}</span>
 }
 
-const BASE = { sortable: true, resizable: true, filter: true }
+// filter: false — column header filters are client-side and only see loaded
+// rows under the infinite row model; the org search/type filters in the
+// sidebar are server-side and cover filtering.
+const BASE = { sortable: true, resizable: true, filter: false }
 
 const COLUMN_DEFS = [
   { ...BASE, field: 'canonical_name',   headerName: 'Organization',   width: 220, hide: false },
@@ -59,30 +65,44 @@ const COLUMN_DEFS = [
   { ...BASE, field: 'website',          headerName: 'Website',        width: 180, hide: true,  cellRenderer: LinkCell },
   { ...BASE, field: 'linkedin_url',     headerName: 'LinkedIn',       width: 160, hide: true,  cellRenderer: LinkCell },
   { ...BASE, field: 'notes',            headerName: 'Notes',          width: 260, hide: true,  cellRenderer: TruncatedText },
-]
+].map(c => ({ ...c, sortable: SORTABLE_FIELDS.has(c.field) }))
 
-const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: true }
+const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: false }
 
 export default function OrgsTable({ filters, filterOpen, onToggleFilter, onSelectTrial }) {
-  const [rowData, setRowData] = useState([])
+  const gridRef = useRef(null)
+  // Only the latest in-flight getRows response may write the header total
+  // (see FundingTable for the rationale).
+  const reqSeqRef = useRef(0)
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [selectedOrg, setSelectedOrg] = useState(null)
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await getOrgs({ ...filters, page_size: 10000 })
-      setRowData(res.data.results)
-      setTotal(res.data.total)
-    } catch (e) {
-      console.error('Failed to fetch orgs:', e)
-    } finally {
-      setLoading(false)
-    }
-  }, [filters])
-
-  useEffect(() => { fetchData() }, [fetchData])
+  // Server-side pagination via AG Grid's infinite row model; sorting is
+  // pushed to the API (sort/dir params).
+  const datasource = useMemo(() => ({
+    getRows: async (params) => {
+      const pageSize = params.endRow - params.startRow
+      const page = Math.floor(params.startRow / pageSize) + 1
+      const sm = params.sortModel && params.sortModel[0]
+      const sort = sm ? sm.colId : 'trial_count'
+      const dir = sm ? sm.sort : 'desc'
+      const reqId = ++reqSeqRef.current
+      setLoading(true)
+      try {
+        const res = await getOrgs({ ...filters, page, page_size: pageSize, sort, dir })
+        const { results, total: totalCount } = res.data
+        if (reqId === reqSeqRef.current) setTotal(totalCount)
+        params.successCallback(results, totalCount)
+      } catch (e) {
+        console.error('Failed to fetch orgs:', e)
+        params.failCallback()
+      } finally {
+        if (reqId === reqSeqRef.current) setLoading(false)
+      }
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [JSON.stringify(filters)])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -102,14 +122,17 @@ export default function OrgsTable({ filters, filterOpen, onToggleFilter, onSelec
       <div style={{ flex: 1, minHeight: 0 }}>
         <div className="ag-theme-alpine" style={{ height: '100%', width: '100%' }}>
           <AgGridReact
-            rowData={rowData}
+            ref={gridRef}
             columnDefs={COLUMN_DEFS}
             defaultColDef={DEFAULT_COL_DEF}
+            rowModelType="infinite"
+            datasource={datasource}
+            cacheBlockSize={100}
             pagination
             paginationPageSize={100}
             enableCellTextSelection
             rowSelection="single"
-            onRowClicked={(e) => setSelectedOrg(e.data)}
+            onRowClicked={(e) => { if (e.data) setSelectedOrg(e.data) }}
             animateRows
           />
         </div>
@@ -122,7 +145,9 @@ export default function OrgsTable({ filters, filterOpen, onToggleFilter, onSelec
           onSelectTrial={onSelectTrial}
           onOrgUpdated={(updated) => {
             setSelectedOrg(updated)
-            setRowData((prev) => prev.map((r) => r.id === updated.id ? updated : r))
+            // Infinite row model rows are owned by the block cache, not local
+            // state — refetch the loaded blocks to show the edit.
+            gridRef.current?.api?.refreshInfiniteCache()
           }}
         />
       )}

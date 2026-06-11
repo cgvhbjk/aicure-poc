@@ -1,10 +1,26 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { AgGridReact } from 'ag-grid-react'
 import { getTrials } from '../api'
 import DetailPanel from './DetailPanel'
 import FieldsPanel from './FieldsPanel'
 import FilterBar from './FilterBar'
 import { attachGridStateListeners } from '../utils/gridEvents'
+
+// Mirror api.js: VITE_API_URL override wins, else same-origin in prod / the dev
+// backend. Used for the direct-link CSV export below.
+const _API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '' : 'http://localhost:8000')
+
+// Columns the backend can ORDER BY (mirrors TRIAL_SORTABLE_COLUMNS in api.py).
+// Any column outside this set is display-only; marking it unsortable avoids
+// showing a sort arrow the server would ignore.
+const SORTABLE_FIELDS = new Set([
+  'aicure_fit', 'has_news', 'therapeutic_area', 'title_brief', 'status',
+  'phase', 'sponsor', 'sponsor_type', 'lead_country', 'enrollment',
+  'start_date', 'primary_completion', 'study_completion', 'first_posted',
+  'last_updated', 'id', 'study_type', 'num_arms', 'num_sites', 'pi_name',
+  'is_pediatric', 'epro_ecoa', 'digital_biomarkers', 'dct_elements',
+  'ingested_at',
+])
 
 // ── Cell renderers ────────────────────────────────────────────────────────────
 
@@ -188,7 +204,10 @@ function RegistryPillsCell({ value }) {
 
 // ── Column definitions ────────────────────────────────────────────────────────
 
-const BASE = { sortable: true, resizable: true, filter: true }
+// filter: false — column header filters are client-side and only see loaded
+// rows under the infinite row model; filtering goes through the FilterBar
+// (server-side conditions) instead, same as the Funding grid.
+const BASE = { sortable: true, resizable: true, filter: false }
 
 function FitScoreCell({ value }) {
   if (value == null || value === '') return null
@@ -210,7 +229,7 @@ const COLUMN_DEFS = [
     filter: false,
   },
   { ...BASE, field: 'therapeutic_area',    headerName: 'Area',               width: 150, hide: false },
-  { ...BASE, field: 'title_brief',         headerName: 'Trial Title',        width: 320, hide: false, tooltipField: 'brief_summary' },
+  { ...BASE, field: 'title_brief',         headerName: 'Trial Title',        width: 320, hide: false, tooltipField: 'title_official' },
   { ...BASE, field: 'status',              headerName: 'Status',             width: 140, hide: false, cellRenderer: StatusBadge },
   { ...BASE, field: 'phase',               headerName: 'Phase',              width: 90,  hide: false, cellRenderer: PhaseBadge },
   { ...BASE, field: 'sponsor',             headerName: 'Sponsor',            width: 200, hide: false },
@@ -240,15 +259,12 @@ const COLUMN_DEFS = [
   { ...BASE, field: 'max_age',             headerName: 'Max Age',            width: 80,  hide: true },
   { ...BASE, field: 'sex_eligibility',     headerName: 'Sex',                width: 90,  hide: true },
   { ...BASE, field: 'is_pediatric',        headerName: 'Pediatric',          width: 100, hide: true,  cellRenderer: YesNoBadge },
-  { ...BASE, field: 'inclusion_criteria',  headerName: 'Inclusion',          width: 260, hide: true,  cellRenderer: TruncatedText },
-  { ...BASE, field: 'exclusion_criteria',  headerName: 'Exclusion',          width: 260, hide: true,  cellRenderer: TruncatedText },
+  // (eligibility criteria, endpoints and summary live in the detail panel —
+  // the list API deliberately omits those fat fields)
   { ...BASE, field: 'mesh_terms',          headerName: 'MeSH Terms',         width: 220, hide: true,  cellRenderer: JsonArrayCell },
-  { ...BASE, field: 'primary_endpoints',   headerName: 'Primary Endpoints',  width: 260, hide: true,  cellRenderer: TruncatedText },
-  { ...BASE, field: 'secondary_endpoints', headerName: 'Secondary Endpoints',width: 260, hide: true,  cellRenderer: TruncatedText },
   { ...BASE, field: 'epro_ecoa',           headerName: 'ePRO/eCOA',          width: 110, hide: true,  cellRenderer: YesNoBadge },
   { ...BASE, field: 'digital_biomarkers',  headerName: 'Digital Biomarkers', width: 140, hide: true,  cellRenderer: YesNoBadge },
   { ...BASE, field: 'dct_elements',        headerName: 'DCT Elements',       width: 120, hide: true,  cellRenderer: YesNoBadge },
-  { ...BASE, field: 'brief_summary',       headerName: 'Summary',            width: 300, hide: true,  cellRenderer: TruncatedText },
   { ...BASE, field: 'registry_id',         headerName: 'Registry IDs',       width: 180, hide: true },
   { ...BASE, field: 'source_url',          headerName: 'Source URL',         width: 200, hide: true,  cellRenderer: SourceUrlCell },
   { ...BASE, field: 'registry_sources',    headerName: 'Registries',         width: 200, hide: false, cellRenderer: RegistryPillsCell, filter: false },
@@ -266,57 +282,82 @@ const COLUMN_DEFS = [
   { ...BASE, field: 'rebec_id',            headerName: 'ReBec',              width: 130, hide: true },
   { ...BASE, field: 'pactr_id',            headerName: 'PACTR',              width: 130, hide: true },
   { ...BASE, field: 'ingested_at',         headerName: 'Ingested',           width: 130, hide: true,  cellRenderer: DateCell },
-]
+].map(c => ({ ...c, sortable: SORTABLE_FIELDS.has(c.field) }))
 
-const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: true }
+const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: false }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function TrialsTable({
-  filters, agGridFilters, onGridReady: onGridReadyProp, onGridStateChange,
+  filters, onGridReady: onGridReadyProp, onGridStateChange,
   conditions, onAddCondition, onEditCondition, onRemoveCondition, onClearConditions,
   therapeuticAreas, countries,
 }) {
   const gridRef = useRef(null)
+  // Monotonic id of the most recent getRows call — only the latest in-flight
+  // response may write the header total (see FundingTable for the rationale).
+  const reqSeqRef = useRef(0)
   const disposeGridListenersRef = useRef(null)
-  const [rowData, setRowData] = useState([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [selectedTrial, setSelectedTrial] = useState(null)
   const [fieldsOpen, setFieldsOpen] = useState(false)
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await getTrials({ ...filters, page_size: 10000 })
-      setRowData(res.data.results)
-      setTotal(res.data.total)
-    } catch (e) {
-      console.error('Failed to fetch trials:', e)
-    } finally {
-      setLoading(false)
-    }
-  }, [filters])
-
-  useEffect(() => { fetchData() }, [fetchData])
-
-  useEffect(() => {
-    const api = gridRef.current?.api
-    if (!api) return
-    try { api.setFilterModel(agGridFilters || {}) } catch {}
-  }, [agGridFilters])
+  // Server-side pagination via AG Grid's infinite row model: one page per
+  // request instead of the previous page_size=10000 dump. Sorting is pushed
+  // to the API (sort/dir params).
+  const datasource = useMemo(() => ({
+    getRows: async (params) => {
+      const pageSize = params.endRow - params.startRow
+      const page = Math.floor(params.startRow / pageSize) + 1
+      const sm = params.sortModel && params.sortModel[0]
+      const sort = sm ? sm.colId : 'last_updated'
+      const dir = sm ? sm.sort : 'desc'
+      const reqId = ++reqSeqRef.current
+      setLoading(true)
+      try {
+        const res = await getTrials({ ...filters, page, page_size: pageSize, sort, dir })
+        const { results, total: totalCount } = res.data
+        if (reqId === reqSeqRef.current) setTotal(totalCount)
+        params.successCallback(results, totalCount)
+      } catch (e) {
+        console.error('Failed to fetch trials:', e)
+        params.failCallback()
+      } finally {
+        if (reqId === reqSeqRef.current) setLoading(false)
+      }
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [JSON.stringify(filters)])
 
   const handleGridReady = useCallback((params) => {
     onGridReadyProp?.(params.api)
-    try { params.api.setFilterModel(agGridFilters || {}) } catch {}
     disposeGridListenersRef.current = attachGridStateListeners(params.api, onGridStateChange)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onGridReadyProp, onGridStateChange])
 
   useEffect(() => () => { disposeGridListenersRef.current?.() }, [])
 
-  const onExport = () => gridRef.current?.api?.exportDataAsCsv()
-  const onRowClicked = (e) => setSelectedTrial(e.data)
+  // Full filtered export via the backend — the infinite row model only holds
+  // the loaded pages client-side, so exportDataAsCsv would miss rows.
+  const onExport = () => {
+    const sp = new URLSearchParams()
+    Object.entries(filters || {}).forEach(([k, v]) => {
+      if (v === undefined || v === null) return
+      if (Array.isArray(v)) v.forEach((val) => sp.append(k, val))
+      else sp.append(k, v)
+    })
+    const sorted = (gridRef.current?.api?.getColumnState?.() || []).find((c) => c.sort)
+    sp.append('sort', sorted ? sorted.colId : 'last_updated')
+    sp.append('dir', sorted ? sorted.sort : 'desc')
+    const a = document.createElement('a')
+    a.href = `${_API_BASE}/trials/export?${sp.toString()}`
+    a.download = ''
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  }
+  // Rows not yet loaded by the infinite model have no data — ignore clicks.
+  const onRowClicked = (e) => { if (e.data) setSelectedTrial(e.data) }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -350,10 +391,12 @@ export default function TrialsTable({
         <div className="ag-theme-alpine" style={{ flex: 1, minHeight: 0 }}>
           <AgGridReact
             ref={gridRef}
-            rowData={rowData}
             columnDefs={COLUMN_DEFS}
             defaultColDef={DEFAULT_COL_DEF}
             onGridReady={handleGridReady}
+            rowModelType="infinite"
+            datasource={datasource}
+            cacheBlockSize={100}
             pagination
             paginationPageSize={100}
             enableCellTextSelection

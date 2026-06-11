@@ -196,7 +196,6 @@ function applyBoolean(apiParams, c, apiKey) {
 
 export function compileConditions(conditions) {
   const apiParams = {}
-  const agGridFilters = {}
 
   for (const c of conditions) {
     switch (c.field) {
@@ -217,22 +216,21 @@ export function compileConditions(conditions) {
         if (hasValue(c.value)) apiParams.q = singleValue(c.value)
         break
 
-      case 'sponsor': {
-        const v = singleValue(c.value)
-        if (!hasValue(v)) break
-        const agType = c.operator === 'is' ? 'equals'
-          : c.operator === 'not_contains' ? 'notContains'
-          : 'contains'
-        agGridFilters['sponsor'] = { filterType: 'text', type: agType, filter: v }
+      // Server-side LIKE match (sponsor / sponsor_not params). This used to be
+      // an AG Grid client-side filter model, which only worked while the grid
+      // held every row; the infinite row model loads pages on demand, so the
+      // filter has to run in the API. ("is" degrades to contains — acceptable
+      // for a free-text sponsor match.)
+      case 'sponsor':
+        applyTextLike(apiParams, c, 'sponsor')
         break
-      }
 
       default:
         break
     }
   }
 
-  return { apiParams, agGridFilters }
+  return { apiParams }
 }
 
 export function compileNewsConditions(conditions) {

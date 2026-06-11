@@ -112,7 +112,7 @@ export default function App() {
   const toggle = (setFn) => (item) =>
     setFn((prev) => (prev.includes(item) ? prev.filter((x) => x !== item) : [...prev, item]))
 
-  const { apiParams: trialFilters, agGridFilters } = useMemo(
+  const { apiParams: trialFilters } = useMemo(
     () => compileConditions(trials.conditions),
     [trials.conditions]
   )
@@ -317,7 +317,6 @@ export default function App() {
             {activeTab === 'trials' && (
               <TrialsTable
                 filters={trialFilters}
-                agGridFilters={agGridFilters}
                 conditions={trials.conditions}
                 onAddCondition={trials.add}
                 onEditCondition={trials.edit}

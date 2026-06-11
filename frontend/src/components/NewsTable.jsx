@@ -1,10 +1,21 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { AgGridReact } from 'ag-grid-react'
 import { getNews } from '../api'
 import FieldsPanel from './FieldsPanel'
 import FilterBar from './FilterBar'
 import { NEWS_FILTER_FIELDS } from '../utils/conditions'
 import { attachGridStateListeners } from '../utils/gridEvents'
+
+// Mirror api.js: VITE_API_URL override wins, else same-origin in prod / the dev
+// backend. Used for the direct-link CSV export below.
+const _API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '' : 'http://localhost:8000')
+
+// Columns the backend can ORDER BY (mirrors NEWS_SORTABLE_COLUMNS in api.py);
+// joined trial_* columns and the match_method subquery alias are display-only.
+const SORTABLE_FIELDS = new Set([
+  'published_at', 'source', 'title', 'drug_mentioned', 'phase_mentioned',
+  'sponsor_mentioned', 'is_trial_announcement', 'is_trial_results', 'trial_id',
+])
 
 const STATUS_COLORS = {
   RECRUITING:             { background: '#dcfce7', color: '#166534' },
@@ -137,12 +148,14 @@ const COLUMN_DEFS = [
     width: 100,
     valueFormatter: (p) => p.value || '—',
   },
-]
+].map(c => ({ ...c, sortable: SORTABLE_FIELDS.has(c.field) }))
 
+// filter: false — column header filters are client-side and only see loaded
+// rows under the infinite row model; filtering goes through the FilterBar.
 const DEFAULT_COL_DEF = {
   sortable: true,
   resizable: true,
-  filter: true,
+  filter: false,
 }
 
 export default function NewsTable({
@@ -156,28 +169,39 @@ export default function NewsTable({
   onGridStateChange,
 }) {
   const gridRef = useRef(null)
+  // Only the latest in-flight getRows response may write the header total
+  // (see FundingTable for the rationale).
+  const reqSeqRef = useRef(0)
   const disposeGridListenersRef = useRef(null)
-  const [rowData, setRowData] = useState([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [fieldsOpen, setFieldsOpen] = useState(false)
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await getNews({ ...filters, page_size: 10000 })
-      setRowData(res.data.results)
-      setTotal(res.data.total)
-    } catch (e) {
-      console.error('Failed to fetch news:', e)
-    } finally {
-      setLoading(false)
-    }
-  }, [filters])
-
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
+  // Server-side pagination via AG Grid's infinite row model; sorting is
+  // pushed to the API (sort/dir params).
+  const datasource = useMemo(() => ({
+    getRows: async (params) => {
+      const pageSize = params.endRow - params.startRow
+      const page = Math.floor(params.startRow / pageSize) + 1
+      const sm = params.sortModel && params.sortModel[0]
+      const sort = sm ? sm.colId : 'published_at'
+      const dir = sm ? sm.sort : 'desc'
+      const reqId = ++reqSeqRef.current
+      setLoading(true)
+      try {
+        const res = await getNews({ ...filters, page, page_size: pageSize, sort, dir })
+        const { results, total: totalCount } = res.data
+        if (reqId === reqSeqRef.current) setTotal(totalCount)
+        params.successCallback(results, totalCount)
+      } catch (e) {
+        console.error('Failed to fetch news:', e)
+        params.failCallback()
+      } finally {
+        if (reqId === reqSeqRef.current) setLoading(false)
+      }
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [JSON.stringify(filters)])
 
   const handleGridReady = useCallback((params) => {
     onGridReadyProp?.(params.api)
@@ -185,6 +209,26 @@ export default function NewsTable({
   }, [onGridReadyProp, onGridStateChange])
 
   useEffect(() => () => { disposeGridListenersRef.current?.() }, [])
+
+  // Full filtered export via the backend — the infinite row model only holds
+  // the loaded pages client-side, so exportDataAsCsv would miss rows.
+  const onExport = () => {
+    const sp = new URLSearchParams()
+    Object.entries(filters || {}).forEach(([k, v]) => {
+      if (v === undefined || v === null) return
+      if (Array.isArray(v)) v.forEach((val) => sp.append(k, val))
+      else sp.append(k, v)
+    })
+    const sorted = (gridRef.current?.api?.getColumnState?.() || []).find((c) => c.sort)
+    sp.append('sort', sorted ? sorted.colId : 'published_at')
+    sp.append('dir', sorted ? sorted.sort : 'desc')
+    const a = document.createElement('a')
+    a.href = `${_API_BASE}/news/export?${sp.toString()}`
+    a.download = ''
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -207,7 +251,7 @@ export default function NewsTable({
         />
 
         <span className="toolbar-sep" />
-        <button className="btn-sm" onClick={() => gridRef.current?.api?.exportDataAsCsv()}>
+        <button className="btn-sm" onClick={onExport}>
           Export CSV
         </button>
         <span className="row-count">
@@ -219,10 +263,12 @@ export default function NewsTable({
         <div className="ag-theme-alpine" style={{ flex: 1, minHeight: 0 }}>
           <AgGridReact
             ref={gridRef}
-            rowData={rowData}
             columnDefs={COLUMN_DEFS}
             defaultColDef={DEFAULT_COL_DEF}
             onGridReady={handleGridReady}
+            rowModelType="infinite"
+            datasource={datasource}
+            cacheBlockSize={100}
             pagination
             paginationPageSize={100}
             enableCellTextSelection
