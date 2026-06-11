@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { getGrantTrials } from '../api'
+import { getGrant, getGrantTrials } from '../api'
 
 const STATUS_STYLES = {
   ACTIVE:     { background: '#dcfce7', color: '#166534' },
@@ -65,20 +65,28 @@ function parseJsonArray(val) {
   }
 }
 
-export default function GrantDetailPanel({ grant, onClose, onSelectTrial }) {
+export default function GrantDetailPanel({ grant: grantRow, onClose, onSelectTrial }) {
   const [linkedTrials, setLinkedTrials] = useState([])
   const [loadingTrials, setLoadingTrials] = useState(false)
+  // The grid row omits fat fields (abstract) to keep list responses small, so
+  // fetch the full record; render the row's fields meanwhile.
+  const [fullGrant, setFullGrant] = useState(null)
 
   useEffect(() => {
-    if (!grant?.id) return
+    if (!grantRow?.id) return
     setLinkedTrials([])
     setLoadingTrials(true)
-    getGrantTrials(grant.id)
+    setFullGrant(null)
+    getGrant(grantRow.id)
+      .then((r) => setFullGrant(r.data))
+      .catch(console.error)
+    getGrantTrials(grantRow.id)
       .then((r) => setLinkedTrials(r.data))
       .catch(console.error)
       .finally(() => setLoadingTrials(false))
-  }, [grant?.id])
+  }, [grantRow?.id])
 
+  const grant = fullGrant || grantRow
   if (!grant) return null
 
   const statusStyle = STATUS_STYLES[grant.status] || STATUS_STYLES.UNKNOWN

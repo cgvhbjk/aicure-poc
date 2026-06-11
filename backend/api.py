@@ -52,6 +52,44 @@ def _like_pattern(s: str) -> str:
     return f"%{escaped}%"
 
 
+def _iso_day(s: str, plus_days: int = 0):
+    """Normalize a date query param to a bare YYYY-MM-DD string (optionally
+    shifted), for direct string comparison against stored dates. Stored values
+    are either YYYY-MM-DD or full ISO timestamps; both orders correctly against
+    a bare-date string, which (unlike wrapping the column in DATE()) keeps the
+    predicate indexable. 422 on garbage, where DATE() used to return NULL and
+    silently match nothing."""
+    try:
+        d = datetime.strptime(s.strip()[:10], "%Y-%m-%d") + timedelta(days=plus_days)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid date: {s!r}")
+    return d.strftime("%Y-%m-%d")
+
+
+def _grid_columns(table: str, exclude: set) -> str:
+    """Column list for grid SELECTs: everything except the fat text fields the
+    grids never render (eligibility criteria, endpoint/summary prose). Rows
+    average ~8KB and the bulk of that is these fields, so trimming them cuts
+    list-response size several-fold. Detail views fetch the full row by id.
+    Resolved from PRAGMA table_info at import (after db._init_db has run its
+    ALTERs) so new columns are picked up automatically."""
+    conn = get_connection()
+    try:
+        cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
+    finally:
+        conn.close()
+    return ", ".join(c for c in cols if c not in exclude)
+
+
+# brief_summary is also read by the score_trial/score_grant fallback for rows
+# the backfill hasn't reached; those rows re-fetch it by id (see get_trials).
+_TRIAL_GRID_COLS = _grid_columns("trials", {
+    "inclusion_criteria", "exclusion_criteria", "brief_summary",
+    "primary_endpoints", "secondary_endpoints",
+})
+_GRANT_GRID_COLS = _grid_columns("grants", {"abstract"})
+
+
 def cleanup_old_news():
     """Delete non-announcement news older than 7 days and repair has_news flags."""
     conn = get_connection()
@@ -183,6 +221,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Browser-cacheable GETs. ONLY aggregate/lookup endpoints whose data changes at
+# ingest cadence — list endpoints (trials/news/orgs/grants/merges) must stay
+# uncached because the UI refetches them right after mutations (merge confirm,
+# org PATCH, upload) and a cached 200 would serve the pre-mutation state.
+_CACHEABLE_PATHS = ("/stats", "/registries/stats", "/grants/stats", "/grants/filter-options")
+
+
+@app.middleware("http")
+async def _cache_headers(request, call_next):
+    response = await call_next(request)
+    if (request.method == "GET" and response.status_code == 200
+            and request.url.path in _CACHEABLE_PATHS):
+        response.headers.setdefault("Cache-Control", "private, max-age=300")
+    return response
+
 
 def row_to_dict(row):
     return dict(row)
@@ -290,17 +343,43 @@ def get_trials(
     total = conn.execute(f"SELECT COUNT(*) FROM trials {where_sql}", params).fetchone()[0]
     offset = (page - 1) * page_size
     rows = conn.execute(
-        f"SELECT * FROM trials {where_sql} ORDER BY last_updated DESC LIMIT ? OFFSET ?",
+        f"SELECT {_TRIAL_GRID_COLS} FROM trials {where_sql} "
+        f"ORDER BY last_updated DESC LIMIT ? OFFSET ?",
         params + [page_size, offset],
     ).fetchall()
 
-    conn.close()
     results = [row_to_dict(r) for r in rows]
-    for t in results:
-        # Prefer the precomputed score; fall back for any un-backfilled row.
-        if t.get("aicure_fit") is None:
-            t["aicure_fit"] = score_trial(t)
+    # Prefer the precomputed score; fall back for any un-backfilled row. The
+    # scorer reads brief_summary, which the grid SELECT deliberately omits, so
+    # re-fetch it for just the unscored rows (rare: backfill runs after every
+    # ingest and daily at 07:00 UTC).
+    unscored = [t["id"] for t in results if t.get("aicure_fit") is None]
+    if unscored:
+        placeholders = ",".join("?" * len(unscored))
+        summaries = dict(conn.execute(
+            f"SELECT id, brief_summary FROM trials WHERE id IN ({placeholders})",
+            unscored,
+        ).fetchall())
+        for t in results:
+            if t.get("aicure_fit") is None:
+                t["aicure_fit"] = score_trial({**t, "brief_summary": summaries.get(t["id"])})
+    conn.close()
     return {"total": total, "page": page, "results": results}
+
+
+@app.get("/trials/{trial_id}")
+def get_trial(trial_id: str):
+    """Full trial record, including the fat text fields (summary, eligibility
+    criteria, endpoints) the grid SELECT omits. The detail panel fetches this."""
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM trials WHERE id = ?", (trial_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Trial not found")
+    t = row_to_dict(row)
+    if t.get("aicure_fit") is None:
+        t["aicure_fit"] = score_trial(t)
+    return t
 
 
 @app.get("/news")
@@ -1386,12 +1465,19 @@ def _grants_where(q, source, therapeutic_area, status, country, country_q,
     if country_q_not:
         where_clauses.append("(country IS NULL OR LOWER(country) NOT LIKE ? ESCAPE '\\')")
         params.append(_like_pattern(country_q_not))
+    # award_date holds a mix of bare YYYY-MM-DD and full ISO timestamps; bare-
+    # date string bounds order correctly against both (see _iso_day), unlike
+    # the old DATE(award_date) wrapper which forced a per-row function call and
+    # made the predicate unindexable.
     if award_date_from:
-        where_clauses.append("DATE(award_date) >= DATE(?)")
-        params.append(award_date_from)
+        where_clauses.append("award_date >= ?")
+        params.append(_iso_day(award_date_from))
     if award_date_to:
-        where_clauses.append("DATE(award_date) <= DATE(?)")
-        params.append(award_date_to)
+        # Inclusive "to" day = exclusive next-day bound, so same-day timestamps
+        # ("...T23:59:59") still match. > '' keeps NULL/empty excluded, which
+        # the NULL-propagating DATE() comparison used to do implicitly.
+        where_clauses.append("award_date > '' AND award_date < ?")
+        params.append(_iso_day(award_date_to, plus_days=1))
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     return where_sql, params
@@ -1441,26 +1527,36 @@ def get_grants(
         research_type, agency_division, fiscal_year_min, fiscal_year_max,
         award_date_from, award_date_to)
 
-    total = conn.execute(f"SELECT COUNT(*) FROM grants {where_sql}", params).fetchone()[0]
-    total_funding = conn.execute(
-        f"SELECT COALESCE(SUM(amount_usd), 0) FROM grants {where_sql}", params
-    ).fetchone()[0]
+    # One pass for both header aggregates instead of two scans of the same
+    # filtered set.
+    total, total_funding = conn.execute(
+        f"SELECT COUNT(*), COALESCE(SUM(amount_usd), 0) FROM grants {where_sql}",
+        params,
+    ).fetchone()
     offset = (page - 1) * page_size
 
     # aicure_fit is precomputed (score_backfill.py) into a real column, so the
     # default fit ranking paginates server-side like any other sort.
     rows = conn.execute(
-        f"SELECT * FROM grants {where_sql} {_grants_order_by(sort, sort_dir)} "
-        f"LIMIT ? OFFSET ?",
+        f"SELECT {_GRANT_GRID_COLS} FROM grants {where_sql} "
+        f"{_grants_order_by(sort, sort_dir)} LIMIT ? OFFSET ?",
         params + [page_size, offset],
     ).fetchall()
 
-    conn.close()
     results = [row_to_dict(r) for r in rows]
-    for g in results:
-        # Fallback for any row not yet backfilled (e.g. just uploaded).
-        if g.get("aicure_fit") is None:
-            g["aicure_fit"] = score_grant(g)
+    # Fallback for any row not yet backfilled (e.g. just uploaded). The scorer
+    # reads abstract, which the grid SELECT omits — re-fetch for those rows.
+    unscored = [g["id"] for g in results if g.get("aicure_fit") is None]
+    if unscored:
+        placeholders = ",".join("?" * len(unscored))
+        abstracts = dict(conn.execute(
+            f"SELECT id, abstract FROM grants WHERE id IN ({placeholders})",
+            unscored,
+        ).fetchall())
+        for g in results:
+            if g.get("aicure_fit") is None:
+                g["aicure_fit"] = score_grant({**g, "abstract": abstracts.get(g["id"])})
+    conn.close()
     return {"total": total, "total_funding": total_funding, "page": page, "results": results}
 
 

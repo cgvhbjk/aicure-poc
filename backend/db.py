@@ -11,6 +11,13 @@ def get_connection(check_same_thread=True):
     # thread touches the connection at a time, so this stays safe.
     conn = sqlite3.connect(DB_PATH, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
+    # mmap covers the whole DB file (331MB and growing) so reads hit the OS
+    # page cache directly instead of going through a read() per page — this
+    # matters because connections are opened per-request, so SQLite's own page
+    # cache starts cold every time. temp_store keeps the temp B-trees built for
+    # non-indexed ORDER BYs (e.g. secondary grant sorts) in RAM.
+    conn.execute("PRAGMA mmap_size=400000000")
+    conn.execute("PRAGMA temp_store=MEMORY")
     return conn
 
 

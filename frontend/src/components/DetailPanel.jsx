@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getTrialNews, getTrialRegistries } from '../api'
+import { getTrial, getTrialNews, getTrialRegistries } from '../api'
 
 const STATUS_STYLES = {
   RECRUITING:             { background: '#dcfce7', color: '#166534' },
@@ -148,33 +148,41 @@ const REGISTRY_URLS = {
   'EU-CTR':             (id) => `https://www.clinicaltrialsregister.eu/ctr-search/search?query=${id}`,
 }
 
-export default function DetailPanel({ trial, onClose }) {
+export default function DetailPanel({ trial: trialRow, onClose }) {
   const [news, setNews] = useState([])
   const [loadingNews, setLoadingNews] = useState(false)
   const [registries, setRegistries] = useState([])
   const [copied, setCopied] = useState(false)
+  // The grid row omits fat fields (brief_summary, eligibility criteria, ...)
+  // to keep list responses small, so fetch the full record; render the row's
+  // fields meanwhile.
+  const [fullTrial, setFullTrial] = useState(null)
 
   const copyNct = useCallback(() => {
-    navigator.clipboard.writeText(trial.id).then(() => {
+    navigator.clipboard.writeText(trialRow.id).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })
-  }, [trial?.id])
+  }, [trialRow?.id])
 
   useEffect(() => {
-    if (!trial?.id) return
+    if (!trialRow?.id) return
     setNews([])
     setLoadingNews(true)
     setRegistries([])
-    getTrialNews(trial.id)
+    setFullTrial(null)
+    getTrial(trialRow.id)
+      .then((r) => setFullTrial(r.data))
+      .catch(console.error)
+    getTrialNews(trialRow.id)
       .then((r) => setNews(r.data))
       .catch(console.error)
-      .finally(() => setLoadingNews(false))
-    getTrialRegistries(trial.id)
+    getTrialRegistries(trialRow.id)
       .then((r) => setRegistries(r.data))
       .catch(console.error)
-  }, [trial?.id])
+  }, [trialRow?.id])
 
+  const trial = fullTrial || trialRow
   if (!trial) return null
 
   const statusStyle = STATUS_STYLES[trial.status] || { background: '#f1f5f9', color: '#475569' }

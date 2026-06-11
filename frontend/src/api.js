@@ -23,6 +23,7 @@ const api = axios.create({
 })
 
 export const getTrials = (params) => api.get('/trials', { params })
+export const getTrial = (trialId) => api.get(`/trials/${trialId}`)
 export const getNews = (params) => api.get('/news', { params })
 export const getTrialNews = (nctId) => api.get(`/trials/${nctId}/news`)
 export const getTrialRegistries = (trialId) => api.get(`/trials/${trialId}/registries`)

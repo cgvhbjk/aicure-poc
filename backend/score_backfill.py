@@ -64,6 +64,12 @@ def backfill(conn=None):
         n_grants = _backfill_table(conn, "grants", score_grant, _GRANT_SCORE_COLS)
         n_trials = _backfill_table(conn, "trials", score_trial, _TRIAL_SCORE_COLS)
         print(f"[score_backfill] scored {n_grants} grants, {n_trials} trials")
+        # Refresh planner statistics here because every ingest path (ingest.py,
+        # both reingest scripts, the daily rescore job) ends in backfill() —
+        # one call site keeps sqlite_stat1 current after every bulk write.
+        # Without stats the planner guesses index selectivity blind.
+        conn.execute("ANALYZE")
+        conn.commit()
         return n_grants, n_trials
     finally:
         if own:
