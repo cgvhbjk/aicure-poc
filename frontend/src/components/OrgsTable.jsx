@@ -2,7 +2,7 @@ import React, { useState, useRef, useMemo } from 'react'
 import { AgGridReact } from 'ag-grid-react'
 import { getOrgs } from '../api'
 import OrgDetailPanel from './OrgDetailPanel'
-import { GRID_LOADING_TEMPLATE, GRID_EMPTY_TEMPLATE } from '../utils/gridUi'
+import { GRID_LOADING_TEMPLATE, GRID_EMPTY_TEMPLATE, gridErrorMessage } from '../utils/gridUi'
 
 // Columns the backend can ORDER BY (mirrors ORG_SORTABLE_COLUMNS in api.py).
 const SORTABLE_FIELDS = new Set(['canonical_name', 'org_type', 'trial_count'])
@@ -77,6 +77,9 @@ export default function OrgsTable({ filters, filterOpen, onToggleFilter, onSelec
   const reqSeqRef = useRef(0)
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
+  // Last datasource error, shown in the toolbar so a failed fetch doesn't read
+  // as an empty result ("No matching rows"); cleared on the next success.
+  const [error, setError] = useState(null)
   const [selectedOrg, setSelectedOrg] = useState(null)
 
   // Server-side pagination via AG Grid's infinite row model; sorting is
@@ -93,10 +96,11 @@ export default function OrgsTable({ filters, filterOpen, onToggleFilter, onSelec
       try {
         const res = await getOrgs({ ...filters, page, page_size: pageSize, sort, dir })
         const { results, total: totalCount } = res.data
-        if (reqId === reqSeqRef.current) setTotal(totalCount)
+        if (reqId === reqSeqRef.current) { setTotal(totalCount); setError(null) }
         params.successCallback(results, totalCount)
       } catch (e) {
         console.error('Failed to fetch orgs:', e)
+        if (reqId === reqSeqRef.current) setError(gridErrorMessage(e))
         params.failCallback()
       } finally {
         if (reqId === reqSeqRef.current) setLoading(false)
@@ -116,7 +120,9 @@ export default function OrgsTable({ filters, filterOpen, onToggleFilter, onSelec
         </button>
         <span className="toolbar-sep" />
         <span className="row-count">
-          {loading ? 'Loading…' : `${total.toLocaleString()} organizations`}
+          {loading ? 'Loading…'
+            : error ? <span style={{ color: '#dc2626' }}>{error}</span>
+            : `${total.toLocaleString()} organizations`}
         </span>
       </div>
 

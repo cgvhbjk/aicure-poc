@@ -5,7 +5,7 @@ import DetailPanel from './DetailPanel'
 import FieldsPanel from './FieldsPanel'
 import FilterBar from './FilterBar'
 import { attachGridStateListeners } from '../utils/gridEvents'
-import { GRID_LOADING_TEMPLATE, GRID_EMPTY_TEMPLATE } from '../utils/gridUi'
+import { GRID_LOADING_TEMPLATE, GRID_EMPTY_TEMPLATE, gridErrorMessage } from '../utils/gridUi'
 
 // Mirror api.js: VITE_API_URL override wins, else same-origin in prod / the dev
 // backend. Used for the direct-link CSV export below.
@@ -301,6 +301,9 @@ export default function TrialsTable({
   const disposeGridListenersRef = useRef(null)
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
+  // Last datasource error, shown in the toolbar so a failed fetch doesn't read
+  // as an empty result ("No matching rows"); cleared on the next success.
+  const [error, setError] = useState(null)
   const [selectedTrial, setSelectedTrial] = useState(null)
   const [fieldsOpen, setFieldsOpen] = useState(false)
 
@@ -319,10 +322,11 @@ export default function TrialsTable({
       try {
         const res = await getTrials({ ...filters, page, page_size: pageSize, sort, dir })
         const { results, total: totalCount } = res.data
-        if (reqId === reqSeqRef.current) setTotal(totalCount)
+        if (reqId === reqSeqRef.current) { setTotal(totalCount); setError(null) }
         params.successCallback(results, totalCount)
       } catch (e) {
         console.error('Failed to fetch trials:', e)
+        if (reqId === reqSeqRef.current) setError(gridErrorMessage(e))
         params.failCallback()
       } finally {
         if (reqId === reqSeqRef.current) setLoading(false)
@@ -384,7 +388,9 @@ export default function TrialsTable({
         <span className="toolbar-sep" />
         <button className="btn-sm" onClick={onExport}>Export CSV</button>
         <span className="row-count">
-          {loading ? 'Loading…' : `${total.toLocaleString()} trials`}
+          {loading ? 'Loading…'
+            : error ? <span style={{ color: '#dc2626' }}>{error}</span>
+            : `${total.toLocaleString()} trials`}
         </span>
       </div>
 

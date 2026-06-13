@@ -157,6 +157,9 @@ export default function DetailPanel({ trial: trialRow, onClose }) {
   // to keep list responses small, so fetch the full record; render the row's
   // fields meanwhile.
   const [fullTrial, setFullTrial] = useState(null)
+  // Set when the full-record fetch fails, so the panel can say so rather than
+  // silently rendering the trimmed grid row as if those fields were empty.
+  const [fullError, setFullError] = useState(false)
 
   const copyNct = useCallback(() => {
     navigator.clipboard.writeText(trialRow.id).then(() => {
@@ -167,19 +170,27 @@ export default function DetailPanel({ trial: trialRow, onClose }) {
 
   useEffect(() => {
     if (!trialRow?.id) return
+    // Guard against out-of-order responses: clicking trial A then quickly B
+    // must not let A's late response overwrite B's panel. The cleanup flips
+    // `cancelled`, so a stale request's handlers (including the loading reset)
+    // no-op.
+    let cancelled = false
     setNews([])
     setLoadingNews(true)
     setRegistries([])
     setFullTrial(null)
+    setFullError(false)
     getTrial(trialRow.id)
-      .then((r) => setFullTrial(r.data))
-      .catch(console.error)
+      .then((r) => { if (!cancelled) setFullTrial(r.data) })
+      .catch((e) => { if (!cancelled) { console.error(e); setFullError(true) } })
     getTrialNews(trialRow.id)
-      .then((r) => setNews(r.data))
-      .catch(console.error)
+      .then((r) => { if (!cancelled) setNews(r.data) })
+      .catch((e) => { if (!cancelled) console.error(e) })
+      .finally(() => { if (!cancelled) setLoadingNews(false) })
     getTrialRegistries(trialRow.id)
-      .then((r) => setRegistries(r.data))
-      .catch(console.error)
+      .then((r) => { if (!cancelled) setRegistries(r.data) })
+      .catch((e) => { if (!cancelled) console.error(e) })
+    return () => { cancelled = true }
   }, [trialRow?.id])
 
   const trial = fullTrial || trialRow
@@ -228,6 +239,19 @@ export default function DetailPanel({ trial: trialRow, onClose }) {
               {copied ? 'Copied!' : 'Copy NCT'}
             </button>
           </div>
+
+          {/* Full-record fetch failed — the fat fields below come from the
+              detail endpoint, so warn instead of showing them as blank. */}
+          {fullError && !fullTrial && (
+            <div style={{
+              marginBottom: 16, padding: '8px 10px', borderRadius: 6,
+              background: '#fef3c7', color: '#92400e', fontSize: 12, lineHeight: 1.5,
+              border: '1px solid #fde68a',
+            }}>
+              ⚠ Couldn't load the full record — summary, eligibility criteria, and
+              endpoints may be missing. Showing grid data only.
+            </div>
+          )}
 
           {/* Brief summary */}
           {trial.brief_summary && (

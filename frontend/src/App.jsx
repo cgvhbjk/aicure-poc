@@ -103,8 +103,8 @@ export default function App() {
 
   useEffect(() => {
     getStats().then((r) => setStats(r.data)).catch(console.error)
-    getMergeStats().then((r) => setPendingMergeCount(r.data.pending)).catch(() => {})
-    getGrantStats().then((r) => setGrantStats(r.data)).catch(() => {})
+    getMergeStats().then((r) => setPendingMergeCount(r.data.pending)).catch(console.error)
+    getGrantStats().then((r) => setGrantStats(r.data)).catch(console.error)
   }, [])
 
   const therapeuticAreas = stats ? Object.keys(stats.by_therapeutic_area || {}).sort() : []
@@ -379,7 +379,7 @@ export default function App() {
         <UploadModal
           onClose={() => setShowUploadModal(false)}
           onDone={() => {
-            getMergeStats().then(r => setPendingMergeCount(r.data.pending)).catch(() => {})
+            getMergeStats().then(r => setPendingMergeCount(r.data.pending)).catch(console.error)
           }}
         />
       )}

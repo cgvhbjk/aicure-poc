@@ -20,6 +20,14 @@ const LS_LEGACY_VIEWS_V1 = 'aicure_saved_views'
 const LS_LEGACY_ACTIVE   = 'aicure_active_view_id'
 const LS_LEGACY_SESSION  = 'aicure_session_state'
 
+// A view saved before the grids moved to the infinite row model may carry an
+// AG Grid column-filter model. Those grids now use `filter: false`, so
+// applyStateToGrid's setFilterModel() is a no-op and the persisted filter
+// silently does nothing. Detect it so the UI can prompt re-creating it as a
+// server-side filter condition instead of quietly showing every row.
+const hasLegacyColumnFilter = (v) =>
+  !!v && v.id !== 'default' && v.filterModel && Object.keys(v.filterModel).length > 0
+
 function loadViews(tab) {
   const keys = LS_KEYS(tab)
   // Tab-scoped store already populated?
@@ -106,6 +114,8 @@ export default function ViewsSidebar({
   const [renamingId, setRenamingId] = useState(null)
   const [renameVal, setRenameVal] = useState('')
   const [menuId, setMenuId] = useState(null)
+  // Name of a just-applied view whose saved column filters can no longer apply.
+  const [legacyFilterView, setLegacyFilterView] = useState(null)
   const newInputRef = useRef(null)
   const restoringRef = useRef(false)
   const mountedRef = useRef(false)
@@ -136,6 +146,7 @@ export default function ViewsSidebar({
         restoringRef.current = true
         applyStateToGrid(found)
         onApplyConditions?.(found.conditions || [])
+        setLegacyFilterView(hasLegacyColumnFilter(found) ? found.name : null)
         setTimeout(() => { restoringRef.current = false; mountedRef.current = true }, 60)
       } else {
         // Default Grid — restore session state if present
@@ -203,6 +214,7 @@ export default function ViewsSidebar({
 
   const applyView = (view) => {
     setActiveId(view.id)
+    setLegacyFilterView(hasLegacyColumnFilter(view) ? view.name : null)
     restoringRef.current = true
     if (view.id === 'default') {
       const a = getApi()
@@ -301,6 +313,21 @@ export default function ViewsSidebar({
           </button>
         )}
       </div>
+
+      {legacyFilterView && (
+        <div style={{
+          margin: '0 8px 8px', padding: '6px 8px', borderRadius: 6,
+          background: '#fef3c7', color: '#92400e', fontSize: 11, lineHeight: 1.4,
+          border: '1px solid #fde68a',
+        }}>
+          <button
+            onClick={() => setLegacyFilterView(null)}
+            aria-label="Dismiss warning"
+            style={{ float: 'right', border: 'none', background: 'none', cursor: 'pointer', color: '#92400e', fontWeight: 700, lineHeight: 1 }}
+          >×</button>
+          {`⚠ “${legacyFilterView}” was saved with column filters that no longer apply — re-create them as filter conditions.`}
+        </div>
+      )}
 
       <button className="views-new-btn" onClick={startCreate}>+ New view</button>
 

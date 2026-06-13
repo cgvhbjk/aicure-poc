@@ -6,3 +6,14 @@ export const GRID_LOADING_TEMPLATE =
 
 export const GRID_EMPTY_TEMPLATE =
   '<div class="grid-loading">No matching rows</div>'
+
+// Turn an axios/datasource error into a short, human message for the grid
+// toolbar. A failed fetch must not look like an empty result set ("No matching
+// rows") — surface the backend's detail (e.g. a 422 "Invalid date: …") or the
+// HTTP status, falling back to a connection hint.
+export function gridErrorMessage(e) {
+  const detail = e?.response?.data?.detail
+  if (typeof detail === 'string' && detail) return detail
+  if (e?.response?.status) return `Request failed (${e.response.status})`
+  return 'Failed to load — is the API reachable?'
+}

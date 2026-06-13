@@ -11,7 +11,7 @@ export default function ProgressBar() {
   if (!state.active) return null
   const pct = state.fraction != null ? Math.min(100, Math.round(state.fraction * 100)) : null
   return (
-    <div className="progress-track" role="progressbar"
+    <div className="progress-track" role="progressbar" aria-label="Loading"
       aria-valuenow={pct ?? undefined} aria-valuemin={0} aria-valuemax={100}>
       <div
         className={pct != null ? 'progress-fill' : 'progress-fill progress-indeterminate'}

@@ -93,14 +93,23 @@ _GRANT_GRID_COLS = _grid_columns("grants", {"abstract"})
 def _order_by_clause(sort, direction, sortable, default_col, tiebreak, prefix=""):
     """Shared ORDER BY builder for the paginated grids. The sort column is
     whitelisted against `sortable` (anything else falls back to `default_col`,
-    so ?sort= can't inject SQL). `(col IS NULL)` keeps NULLs last without the
-    NULLS LAST syntax, which only exists on SQLite >= 3.30. `tiebreak` should
-    make the ordering (near-)total so LIMIT/OFFSET pages don't shuffle rows
-    between requests when the sort key has duplicates."""
+    so ?sort= can't inject SQL). `tiebreak` should make the ordering
+    (near-)total so LIMIT/OFFSET pages don't shuffle rows between requests when
+    the sort key has duplicates.
+
+    NULLs are forced last in either direction. SQLite already sorts NULLs last
+    under DESC, so a descending sort emits a bare `col DESC, tiebreak` that reads
+    straight from the matching composite index (idx_*_<col>_*). Only ASC needs a
+    leading `(col IS NULL)` term to move NULLs from first to last — and ASC is
+    never a grid default, so the unindexed scan+sort it implies is the rare path.
+    Emitting that prefix unconditionally (the previous behavior) defeated the
+    index even on the hot DESC default — a full scan + temp B-tree, ~65x slower
+    on trials."""
     col = sort if sort in sortable else default_col
-    d = "ASC" if (direction or "desc").lower() == "asc" else "DESC"
     qcol = f"{prefix}{col}"
-    return f"ORDER BY ({qcol} IS NULL), {qcol} {d}, {tiebreak}"
+    if (direction or "desc").lower() == "asc":
+        return f"ORDER BY ({qcol} IS NULL), {qcol} ASC, {tiebreak}"
+    return f"ORDER BY {qcol} DESC, {tiebreak}"
 
 
 # Columns the grids may sort on server-side (mirrored by SORTABLE_FIELDS in the
@@ -387,10 +396,9 @@ def get_trials(
     completion_date_to: Optional[str] = None,
     sort: Optional[str] = "last_updated",
     sort_dir: str = Query("desc", alias="dir"),
-    page: int = 1,
-    page_size: int = 100,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
 ):
-    page_size = min(page_size, 500)
     conn = get_connection()
 
     where_sql, params = _trials_where(
@@ -600,17 +608,17 @@ def get_news(
     sponsor_mentioned_not: Optional[str] = None,
     sort: Optional[str] = "published_at",
     sort_dir: str = Query("desc", alias="dir"),
-    page: int = 1,
-    page_size: int = 100,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
 ):
-    page_size = min(page_size, 500)
-    conn = get_connection()
-
+    # Build the WHERE first: _iso_day() can raise 422 on a bad date param, and
+    # doing it before opening the connection avoids leaking one on that path.
     where_sql, params = _news_where(
         q, source, linked_only, is_trial_announcement, is_trial_results,
         published_at_from, published_at_to, drug_mentioned, drug_mentioned_not,
         phase_mentioned, phase_mentioned_not, sponsor_mentioned,
         sponsor_mentioned_not)
+    conn = get_connection()
 
     total = conn.execute(
         f"SELECT COUNT(*) FROM news_items ni {where_sql}", params
@@ -741,10 +749,9 @@ def get_orgs(
     has_trials: Optional[bool] = None,
     sort: Optional[str] = "trial_count",
     sort_dir: str = Query("desc", alias="dir"),
-    page: int = 1,
-    page_size: int = 100,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
 ):
-    page_size = min(page_size, 500)
     conn = get_connection()
 
     where_clauses = []
@@ -1035,10 +1042,9 @@ def get_merges(
     status: str = "PENDING",
     min_confidence: float = 0.0,
     max_confidence: float = 1.0,
-    page: int = 1,
-    page_size: int = 50,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
 ):
-    page_size = min(page_size, 200)
     conn = get_connection()
 
     where = ["mc.confidence >= ?", "mc.confidence <= ?"]
@@ -1698,17 +1704,17 @@ def get_grants(
     award_date_to: Optional[str] = None,
     sort: Optional[str] = "aicure_fit",
     sort_dir: str = Query("desc", alias="dir"),
-    page: int = 1,
-    page_size: int = 100,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
 ):
-    page_size = min(page_size, 500)
-    conn = get_connection()
-
+    # Build the WHERE first: _iso_day() can raise 422 on a bad date param, and
+    # doing it before opening the connection avoids leaking one on that path.
     where_sql, params = _grants_where(
         q, source, therapeutic_area, status, country, country_q, country_q_not,
         has_trial_link, min_amount, max_amount, activity_code, org_type,
         research_type, agency_division, fiscal_year_min, fiscal_year_max,
         award_date_from, award_date_to)
+    conn = get_connection()
 
     # One pass for both header aggregates instead of two scans of the same
     # filtered set.

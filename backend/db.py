@@ -18,11 +18,28 @@ def get_connection(check_same_thread=True):
     # non-indexed ORDER BYs (e.g. secondary grant sorts) in RAM.
     conn.execute("PRAGMA mmap_size=400000000")
     conn.execute("PRAGMA temp_store=MEMORY")
+    # Don't fail instantly on a locked DB. The streaming CSV export holds its
+    # read transaction for the whole client download; with WAL (set in _init_db)
+    # readers no longer block the writer, but two writers still serialize — wait
+    # up to 5s for the lock instead of erroring out with "database is locked".
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
 def _init_db():
     conn = get_connection()
+    # WAL is a persistent property of the DB file (set once, sticks across
+    # connections). It lets readers and a writer run concurrently, so a long
+    # streaming CSV export no longer blocks the ingest/PATCH/ANALYZE writers the
+    # way rollback-journal mode did. Wrapped because a read-only FS or some
+    # network mounts reject it — degrade to the previous (delete) mode rather
+    # than refusing to start.
+    try:
+        mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        if str(mode).lower() != "wal":
+            print(f"[db] WARNING: WAL not enabled (journal_mode={mode})")
+    except sqlite3.Error as e:
+        print(f"[db] WARNING: could not enable WAL: {e}")
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS trials (
             id                    TEXT PRIMARY KEY,
@@ -260,27 +277,33 @@ def _init_db():
             ON grants(has_trial_link);
 
         -- Sort/pagination indexes. The grids ORDER BY these columns on every page
-        -- and CSV export; without indexes each request is a full-table scan +
-        -- filesort that degrades silently as data accumulates.
-        -- Grants default ranking is ORDER BY (aicure_fit IS NULL), aicure_fit
-        -- DESC, ingested_at DESC (see api._grants_order_by). A plain composite
-        -- index can't satisfy it because of the leading (aicure_fit IS NULL)
-        -- expression (verified: SQLite falls back to a temp B-tree sort), so we
-        -- index that exact expression tuple. The default sort + every page and
-        -- CSV export then read straight from the index instead of full-scanning
-        -- and filesorting. (Expression indexes need SQLite >= 3.9; the deploy is
-        -- far newer — see the NULLS-LAST note in _grants_order_by.)
-        CREATE INDEX IF NOT EXISTS idx_grants_fit_rank
-            ON grants((aicure_fit IS NULL), aicure_fit DESC, ingested_at DESC);
+        -- and CSV export; without a matching index each request is a full-table
+        -- scan + filesort that degrades silently as data accumulates.
+        --
+        -- Each is a composite of (sort column, tiebreak) that mirrors the exact
+        -- default ORDER BY built by api._order_by_clause, so the page reads
+        -- straight from the index with no temp B-tree. The descending leading
+        -- column also places NULLs last natively, which is why the order-by no
+        -- longer needs a `(col IS NULL)` prefix term — that prefix is an
+        -- expression no plain index can satisfy and forced a full scan + sort
+        -- (verified ~65x slower on trials). The drops below retire the older
+        -- single-column / expression indexes these supersede.
+        DROP INDEX IF EXISTS idx_grants_fit_rank;
+        DROP INDEX IF EXISTS idx_trials_last_updated;
+        DROP INDEX IF EXISTS idx_news_items_published_at;
+        -- Grants default: ORDER BY aicure_fit DESC, ingested_at DESC.
+        CREATE INDEX IF NOT EXISTS idx_grants_fit_ingested
+            ON grants(aicure_fit DESC, ingested_at DESC);
         -- ingested_at as a standalone recency key (digest windows, tiebreaks).
         CREATE INDEX IF NOT EXISTS idx_grants_ingested_at
             ON grants(ingested_at DESC);
-        -- Trials default: ORDER BY last_updated DESC (see /trials, /orgs trials).
-        CREATE INDEX IF NOT EXISTS idx_trials_last_updated
-            ON trials(last_updated DESC);
-        -- News default: ORDER BY published_at DESC (see /news, trial news).
-        CREATE INDEX IF NOT EXISTS idx_news_items_published_at
-            ON news_items(published_at DESC);
+        -- Trials default: ORDER BY last_updated DESC, id (id is a TEXT pk, not
+        -- the rowid, so it must be in the index to avoid a tiebreak sort).
+        CREATE INDEX IF NOT EXISTS idx_trials_last_updated_id
+            ON trials(last_updated DESC, id);
+        -- News default: ORDER BY published_at DESC, id DESC.
+        CREATE INDEX IF NOT EXISTS idx_news_items_published_at_id
+            ON news_items(published_at DESC, id DESC);
         -- Correlated "latest news per trial" subqueries join on news_id; the
         -- composite PK only indexes (trial_id, news_id), so reverse lookups by
         -- news_id were unindexed.

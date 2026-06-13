@@ -71,19 +71,27 @@ export default function GrantDetailPanel({ grant: grantRow, onClose, onSelectTri
   // The grid row omits fat fields (abstract) to keep list responses small, so
   // fetch the full record; render the row's fields meanwhile.
   const [fullGrant, setFullGrant] = useState(null)
+  // Set when the full-record fetch fails, so the panel can say so rather than
+  // silently rendering the trimmed grid row as if those fields were empty.
+  const [fullError, setFullError] = useState(false)
 
   useEffect(() => {
     if (!grantRow?.id) return
+    // Guard against out-of-order responses (rapid row clicks): the cleanup
+    // flips `cancelled` so a stale request's handlers no-op.
+    let cancelled = false
     setLinkedTrials([])
     setLoadingTrials(true)
     setFullGrant(null)
+    setFullError(false)
     getGrant(grantRow.id)
-      .then((r) => setFullGrant(r.data))
-      .catch(console.error)
+      .then((r) => { if (!cancelled) setFullGrant(r.data) })
+      .catch((e) => { if (!cancelled) { console.error(e); setFullError(true) } })
     getGrantTrials(grantRow.id)
-      .then((r) => setLinkedTrials(r.data))
-      .catch(console.error)
-      .finally(() => setLoadingTrials(false))
+      .then((r) => { if (!cancelled) setLinkedTrials(r.data) })
+      .catch((e) => { if (!cancelled) console.error(e) })
+      .finally(() => { if (!cancelled) setLoadingTrials(false) })
+    return () => { cancelled = true }
   }, [grantRow?.id])
 
   const grant = fullGrant || grantRow
@@ -123,6 +131,19 @@ export default function GrantDetailPanel({ grant: grantRow, onClose, onSelectTri
               </span>
             )}
           </div>
+
+          {/* Full-record fetch failed — the abstract and other detail-only
+              fields come from the detail endpoint, so warn rather than blank. */}
+          {fullError && !fullGrant && (
+            <div style={{
+              marginBottom: 16, padding: '8px 10px', borderRadius: 6,
+              background: '#fef3c7', color: '#92400e', fontSize: 12, lineHeight: 1.5,
+              border: '1px solid #fde68a',
+            }}>
+              ⚠ Couldn't load the full record — the abstract and some fields may be
+              missing. Showing grid data only.
+            </div>
+          )}
 
           {/* Funder section */}
           <div style={{ marginBottom: 20 }}>
