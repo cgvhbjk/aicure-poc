@@ -1,8 +1,47 @@
 import sqlite3
 import os
+import contextlib
+import contextvars
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "aicure.db")
+DB_PATH = os.environ.get("AICURE_DB_PATH") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "aicure.db"
+)
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+# When the DB lives on a network filesystem (EFS/NFS in prod), WAL's shared-
+# memory mmap and a large PRAGMA mmap_size are unsafe — both can hand back
+# stale/torn pages even when the PRAGMA "succeeds". Setting AICURE_DB_NETWORK_FS=1
+# forces the NFS-safe settings (rollback journal + mmap off) used below.
+_NETWORK_FS = os.environ.get("AICURE_DB_NETWORK_FS") == "1"
+
+
+# Per-request open-connection tracker, set by the API layer via
+# request_connection_scope(). None outside a request, so scripts, the scheduler,
+# and _init_db keep managing their own connections exactly as before.
+_request_conns: contextvars.ContextVar = contextvars.ContextVar(
+    "aicure_request_conns", default=None
+)
+
+
+@contextlib.contextmanager
+def request_connection_scope():
+    """Track every connection get_connection() hands out inside this block and
+    close them all on exit — even if a handler raised before its own conn.close().
+    close() is idempotent, so handlers that DO close on the happy path stay
+    correct (the second close is a no-op). A leaked sqlite fd contributes to
+    spurious 'database is locked', and per-request connections make that easy to
+    hit on the error path; this closes the gap in one place instead of a
+    try/finally in every endpoint."""
+    token = _request_conns.set([])
+    try:
+        yield
+    finally:
+        for conn in _request_conns.get() or []:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _request_conns.reset(token)
 
 
 def get_connection(check_same_thread=True):
@@ -14,15 +53,27 @@ def get_connection(check_same_thread=True):
     # mmap covers the whole DB file (331MB and growing) so reads hit the OS
     # page cache directly instead of going through a read() per page — this
     # matters because connections are opened per-request, so SQLite's own page
-    # cache starts cold every time. temp_store keeps the temp B-trees built for
-    # non-indexed ORDER BYs (e.g. secondary grant sorts) in RAM.
-    conn.execute("PRAGMA mmap_size=400000000")
+    # cache starts cold every time. Disabled (mmap_size=0) on a network FS,
+    # where mmap coherence over NFS/EFS is unreliable. temp_store keeps the temp
+    # B-trees built for non-indexed ORDER BYs (e.g. secondary grant sorts) in RAM.
+    conn.execute(f"PRAGMA mmap_size={0 if _NETWORK_FS else 400000000}")
     conn.execute("PRAGMA temp_store=MEMORY")
     # Don't fail instantly on a locked DB. The streaming CSV export holds its
     # read transaction for the whole client download; with WAL (set in _init_db)
     # readers no longer block the writer, but two writers still serialize — wait
     # up to 5s for the lock instead of erroring out with "database is locked".
     conn.execute("PRAGMA busy_timeout=5000")
+    # Inside an API request (the middleware opened a tracking scope), register
+    # this connection so it's force-closed at request end even if the handler
+    # raises before its own close(). No-op outside a request. The streaming CSV
+    # export is the only caller passing check_same_thread=False; it opens its
+    # connection lazily as the response body streams — partly AFTER this scope
+    # would close it — so it is deliberately NOT tracked and closes itself in a
+    # finally. Tracking only the default (check_same_thread=True) connections
+    # keeps the two cleanly separated.
+    tracked = _request_conns.get()
+    if tracked is not None and check_same_thread:
+        tracked.append(conn)
     return conn
 
 
@@ -31,15 +82,21 @@ def _init_db():
     # WAL is a persistent property of the DB file (set once, sticks across
     # connections). It lets readers and a writer run concurrently, so a long
     # streaming CSV export no longer blocks the ingest/PATCH/ANALYZE writers the
-    # way rollback-journal mode did. Wrapped because a read-only FS or some
-    # network mounts reject it — degrade to the previous (delete) mode rather
-    # than refusing to start.
+    # way rollback-journal mode did.
+    #
+    # BUT WAL relies on an mmap'd -shm shared-memory file, which does not work
+    # correctly over NFS/EFS — the PRAGMA can report "wal" yet still hand back
+    # stale/torn pages. So when the DB is on a network mount (AICURE_DB_NETWORK_FS=1)
+    # we deliberately use the rollback-journal DELETE mode instead — prod is a
+    # single writer, so the concurrency WAL buys us isn't needed there. Still
+    # wrapped: a read-only FS rejects the PRAGMA outright.
+    target_mode = "DELETE" if _NETWORK_FS else "WAL"
     try:
-        mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
-        if str(mode).lower() != "wal":
-            print(f"[db] WARNING: WAL not enabled (journal_mode={mode})")
+        mode = conn.execute(f"PRAGMA journal_mode={target_mode}").fetchone()[0]
+        if str(mode).lower() != target_mode.lower():
+            print(f"[db] WARNING: journal_mode not {target_mode} (got {mode})")
     except sqlite3.Error as e:
-        print(f"[db] WARNING: could not enable WAL: {e}")
+        print(f"[db] WARNING: could not set journal_mode={target_mode}: {e}")
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS trials (
             id                    TEXT PRIMARY KEY,

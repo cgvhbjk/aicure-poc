@@ -6,11 +6,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import re
 import csv
 import io
+import base64
+import hmac
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, Query, HTTPException, Header, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, Query, HTTPException, Header, UploadFile, File, Form, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +21,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from db import get_connection
+from db import get_connection, DB_PATH, request_connection_scope
 from scoring import score_grant, score_trial
 
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,17 +35,47 @@ GRANT_SORTABLE_COLUMNS = {
     "sponsor_funder", "agency_division", "activity_code", "org_type",
     "country", "pi_name", "has_trial_link",
 }
-_UPLOADS_DIR = os.path.join(_BACKEND_DIR, "data", "uploads")
+# Saved-upload originals live next to the DB, wherever that is: locally that's
+# backend/data/uploads (unchanged); in prod AICURE_DB_PATH points at the EFS
+# mount, so uploads persist there too instead of on the task's ephemeral disk
+# (which would vanish on redeploy and leave uploads.file_path dangling).
+_UPLOADS_DIR = os.path.join(os.path.dirname(DB_PATH), "uploads")
 os.makedirs(_UPLOADS_DIR, exist_ok=True)
 
 _ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
+
+# Single shared credential gating the WHOLE app (UI + API), enforced by the
+# _app_auth middleware ONLY when AICURE_APP_PASSWORD is set — so local dev and
+# the test suite (which leave it unset) behave exactly as before. It MUST be set
+# in any internet-facing deploy (the ECS/ALB migration): without it every read
+# and every mutation is open to anyone who finds the URL.
+_APP_USER = os.environ.get("AICURE_APP_USER", "aicure")
+_APP_PASSWORD = os.environ.get("AICURE_APP_PASSWORD", "")
+# Never gate the load-balancer health probe: it sends no credentials, and a 401
+# there would keep the task permanently out of the ALB rotation.
+_AUTH_EXEMPT_PATHS = {"/healthz"}
 _news_refresh_lock = threading.Lock()
 
 
 def _require_admin(x_admin_key: str):
-    """Fail-closed admin guard: refuses requests when ADMIN_KEY env var is unset."""
-    if not _ADMIN_KEY or x_admin_key != _ADMIN_KEY:
+    """Fail-closed admin guard: refuses requests when ADMIN_KEY env var is unset.
+    Constant-time compare so the key can't be recovered by timing the response."""
+    if not _ADMIN_KEY or not hmac.compare_digest(x_admin_key, _ADMIN_KEY):
         raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _valid_basic_auth(authorization: str) -> bool:
+    """True iff `authorization` is 'Basic <base64(user:pass)>' matching the
+    configured app credentials. Constant-time compares so the password can't be
+    recovered by timing the response."""
+    if not authorization.startswith("Basic "):
+        return False
+    try:
+        user, _, pw = base64.b64decode(authorization[6:].strip()).decode("utf-8").partition(":")
+    except Exception:
+        return False
+    # Non-short-circuit & so both comparisons always run (no early-exit timing leak).
+    return hmac.compare_digest(user, _APP_USER) & hmac.compare_digest(pw, _APP_PASSWORD)
 
 
 def _like_pattern(s: str) -> str:
@@ -235,6 +267,14 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(run_daily_rescore, "cron", hour=7, minute=0, id="daily_rescore")
     scheduler.start()
     print("[scheduler] Daily news job at 06:00 UTC, fit rescore at 07:00 UTC")
+    if _APP_PASSWORD:
+        print("[auth] App-level login enabled (AICURE_APP_PASSWORD set).")
+    else:
+        print("[auth] WARNING: AICURE_APP_PASSWORD unset — the app is OPEN (no "
+              "login on reads or mutations). Set it in any internet-facing deploy.")
+    if _cors_origins == ["*"]:
+        print("[cors] WARNING: AICURE_CORS_ORIGINS unset — allowing all origins "
+              "(*). Pin it to the real origin in any internet-facing deploy.")
     yield
     scheduler.shutdown(wait=False)
 
@@ -259,6 +299,63 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _app_auth(request, call_next):
+    """Gate the whole app (UI + API) behind one shared credential when
+    AICURE_APP_PASSWORD is set; a no-op when it's unset (local dev / tests).
+
+    Why app-wide HTTP Basic rather than per-route key checks: the SPA is served
+    same-origin, so once the browser answers the 401 Basic challenge it re-sends
+    the cached Authorization header on every later XHR automatically — ZERO
+    frontend changes, and no secret baked into the JS bundle. Reads are gated too
+    (not just mutations): the data carries contact PII that shouldn't be
+    world-readable.
+
+    A valid X-Admin-Key is accepted as an alternative *service* credential so the
+    GitHub-cron POST to /admin/* keeps working unchanged (those routes still also
+    enforce the key via _require_admin). OPTIONS preflight and /healthz are exempt
+    so CORS and the load-balancer probe aren't broken."""
+    if (_APP_PASSWORD
+            and request.method != "OPTIONS"
+            and request.url.path not in _AUTH_EXEMPT_PATHS):
+        admin = request.headers.get("X-Admin-Key", "")
+        admin_ok = bool(_ADMIN_KEY) and hmac.compare_digest(admin, _ADMIN_KEY)
+        if not (admin_ok or _valid_basic_auth(request.headers.get("Authorization", ""))):
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="AiCure", charset="UTF-8"'},
+            )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def _close_leaked_conns(request, call_next):
+    """Force-close any DB connection opened while handling this request, even if
+    the handler raised before its own conn.close() — a leaked sqlite fd
+    contributes to spurious 'database is locked'. See db.request_connection_scope;
+    the streaming CSV export opens its connection during the response body (after
+    this scope has exited) and is closed by its own finally instead."""
+    with request_connection_scope():
+        return await call_next(request)
+
+
+@app.get("/healthz")
+def healthz():
+    """Liveness + data check for the load balancer. Fails (503) if the DB can't
+    be opened or comes up seeded-empty (e.g. an unresolved Git LFS pointer
+    instead of the real file), so a broken task never enters the ALB rotation."""
+    try:
+        conn = get_connection()
+        row = conn.execute("SELECT 1 FROM trials LIMIT 1").fetchone()
+        conn.close()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"db unavailable: {e}")
+    if row is None:
+        raise HTTPException(status_code=503, detail="empty database")
+    return {"status": "ok"}
+
 
 # Browser-cacheable GETs. ONLY aggregate/lookup endpoints whose data changes at
 # ingest cadence — list endpoints (trials/news/orgs/grants/merges) must stay
@@ -1113,6 +1210,7 @@ _TRIAL_FK_TABLES = [
     ("registry_source_records", "trial_id"),
     ("trial_org_links", "trial_id"),
     ("trial_news_links", "trial_id"),
+    ("grant_trial_links", "trial_id"),
 ]
 _ORG_FK_TABLES = [
     ("trial_org_links", "org_id"),
@@ -1192,6 +1290,11 @@ def confirm_merge(merge_id: int, body: MergeConfirm):
                 conn.execute("DELETE FROM trial_org_links WHERE trial_id = ?", (loser_id,))
                 conn.execute("INSERT OR IGNORE INTO trial_news_links (trial_id, news_id, match_method) SELECT ?, news_id, match_method FROM trial_news_links WHERE trial_id = ?", (survivor_id, loser_id))
                 conn.execute("DELETE FROM trial_news_links WHERE trial_id = ?", (loser_id,))
+                # Grant links reference trial_id too; reassign to the survivor (PK
+                # (grant_id, trial_id) → OR IGNORE drops any that would collide)
+                # before deleting the loser, so the link isn't orphaned/lost.
+                conn.execute("INSERT OR IGNORE INTO grant_trial_links (grant_id, trial_id, match_method) SELECT grant_id, ?, match_method FROM grant_trial_links WHERE trial_id = ?", (survivor_id, loser_id))
+                conn.execute("DELETE FROM grant_trial_links WHERE trial_id = ?", (loser_id,))
                 conn.execute("DELETE FROM trials WHERE id = ?", (loser_id,))
 
         elif mc["entity_type"] == "organizations":
