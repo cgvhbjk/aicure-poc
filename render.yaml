@@ -1,3 +1,7 @@
+# SUPERSEDED (2026-06): production is migrating to AWS ECS Fargate + EFS — see
+# DEPLOY.md. This file documents the OLD Render free-tier service and is kept for
+# reference until the cutover decommissions Render.
+#
 # Render configuration — single web service hosting both the FastAPI backend
 # and the built React frontend. Free tier.
 #

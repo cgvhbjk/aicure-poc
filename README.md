@@ -18,3 +18,8 @@ cd frontend
 npm install
 npm run dev             # opens at http://localhost:5173
 ```
+
+## Deployment
+Production is migrating off Render to AWS ECS Fargate + EFS (for a durable,
+incrementally-updatable DB). See **[DEPLOY.md](DEPLOY.md)** for the runbook:
+current status, ordered next steps, required env vars, and cutover steps.
