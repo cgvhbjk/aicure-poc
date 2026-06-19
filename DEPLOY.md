@@ -90,6 +90,19 @@ docker run --rm aicure:test sh -c "ls /app/backend/.env || echo ABSENT"
 | env | `AICURE_EMAIL_TO` | your recipient (currently benjaminhelfand@gmail.com) |
 | env (optional) | `AICURE_APP_USER` | Basic-auth username (default `aicure`) |
 | env (optional) | `ANTHROPIC_API_KEY` | enables LLM news classification |
+| env (optional) | `CRM_PUSH_ENABLED` | `1` to push high-fit, pre-start trials to the CRM as leads. Unset → `crm_push.run()` is a no-op. |
+| env (optional) | `CRM_BASE_URL` | the deployed aicure-crm origin, e.g. `https://crm.aicure.example` (no trailing `/api`). Required for the push. |
+| secret (optional) | `CRM_INGEST_TOKEN` | shared secret == the CRM's `PIPELINE_INGEST_TOKEN`. Sent as `X-Ingest-Token`. |
+| env (optional) | `CRM_FIT_THRESHOLD` | min `aicure_fit` to push (default `70`). |
+| env (optional) | `CRM_PUSH_LIMIT` | max rows pushed per run (default `100`). |
+
+### CRM hand-off (crm_push.py)
+After scoring, `ingest.py` (and the daily `reingest_news.py`) call
+`crm_push.run()`, which sends high-fit, **pre-start** (`NOT_YET_RECRUITING`)
+trials to the CRM's `POST /api/ingest/pipeline-lead`. Each pushed trial is
+stamped (`crm_lead_id`, `crm_pushed_at`) so it is never pushed twice. The CRM
+owns outreach (dedup, Seamless.AI email enrichment, send + tracking); see the
+aicure-crm README. Unconfigured = silent no-op, so this is safe to ship dark.
 
 ## Load-bearing constraints (do not break)
 - **Single writer.** `desiredCount=1` + min0/max100. Two tasks = divergent SQLite + double-fired schedulers.

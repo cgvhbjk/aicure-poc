@@ -403,6 +403,12 @@ def _init_db():
         # score_backfill.py after each ingest.
         "ALTER TABLE grants ADD COLUMN aicure_fit INTEGER",
         "ALTER TABLE trials ADD COLUMN aicure_fit INTEGER",
+        # CRM hand-off (crm_push.py): the Lead id returned by the aicure-crm app
+        # and when we pushed it. crm_pushed_at gates re-pushing the same row.
+        "ALTER TABLE trials ADD COLUMN crm_lead_id TEXT",
+        "ALTER TABLE trials ADD COLUMN crm_pushed_at TEXT",
+        "ALTER TABLE grants ADD COLUMN crm_lead_id TEXT",
+        "ALTER TABLE grants ADD COLUMN crm_pushed_at TEXT",
     ]:
         try:
             conn.execute(alter)
