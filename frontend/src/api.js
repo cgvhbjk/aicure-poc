@@ -1,9 +1,15 @@
 import axios from 'axios'
 
 // In prod the backend serves the SPA from the same origin, so use relative
-// URLs. In dev the backend lives on a different port, so default to it.
-// VITE_API_URL always wins if explicitly set.
-const _defaultBase = import.meta.env.PROD ? '' : 'http://localhost:8000'
+// URLs. The app may be served at the domain root (standalone) OR under /pipeline
+// (proxied behind the CRM on one domain) — derive the prefix from the path the
+// SPA was loaded under so API calls hit the right place either way.
+// In dev the backend lives on a different port. VITE_API_URL always wins.
+const _prodBase =
+  typeof window !== 'undefined' && window.location.pathname.startsWith('/pipeline')
+    ? '/pipeline'
+    : ''
+const _defaultBase = import.meta.env.PROD ? _prodBase : 'http://localhost:8000'
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL ?? _defaultBase,
   paramsSerializer: {

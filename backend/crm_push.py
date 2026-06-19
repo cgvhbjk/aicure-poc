@@ -175,6 +175,9 @@ def push_lead(payload):
     import requests
 
     base = os.environ["CRM_BASE_URL"].rstrip("/")
+    # Render's fromService injects a bare hostname; default to https when no scheme.
+    if not base.startswith(("http://", "https://")):
+        base = "https://" + base
     headers = {"Content-Type": "application/json"}
     token = os.environ.get("CRM_INGEST_TOKEN")
     if token:
