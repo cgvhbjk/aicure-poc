@@ -115,3 +115,90 @@ def test_run_pushes_and_stamps(conn, monkeypatch):
     assert row["crm_pushed_at"]
     # No longer a candidate (idempotent across runs).
     assert crm_push.select_crm_candidates(conn) == []
+
+
+# ── name parsing ──────────────────────────────────────────────────────────
+@pytest.mark.parametrize(
+    "full,expected",
+    [
+        ("Jane Q. Powell, MD", ("Jane", "Powell")),
+        ("Powell, Jane", ("Jane", "Powell")),
+        ("Powell, Jane MD", ("Jane", "Powell")),
+        ("Smith", (None, "Smith")),
+        ("Mary Anne Smith", ("Mary", "Smith")),
+        ("Sean O'Brien, PhD, MPH", ("Sean", "O'Brien")),
+        ("", (None, None)),
+        (None, (None, None)),
+    ],
+)
+def test_split_name(full, expected):
+    assert crm_push._split_name(full) == expected
+
+
+# ── push_lead HTTP wiring ─────────────────────────────────────────────────
+class _Resp:
+    def __init__(self, status, payload=None, text=""):
+        self.status_code = status
+        self._payload = payload or {}
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+def test_push_lead_prepends_https_for_bare_host(monkeypatch):
+    captured = {}
+    import requests
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured.update(url=url, headers=headers, json=json)
+        return _Resp(201, {"leadId": "L1", "action": "created"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setenv("CRM_BASE_URL", "crm.onrender.com")  # no scheme
+    monkeypatch.setenv("CRM_INGEST_TOKEN", "tok")
+
+    out = crm_push.push_lead({"externalId": "x"})
+    assert out == {"leadId": "L1", "action": "created"}
+    assert captured["url"] == "https://crm.onrender.com/api/ingest/pipeline-lead"
+    assert captured["headers"]["X-Ingest-Token"] == "tok"
+
+
+def test_push_lead_keeps_explicit_scheme_and_strips_trailing_slash(monkeypatch):
+    captured = {}
+    import requests
+    monkeypatch.setattr(requests, "post", lambda url, **k: captured.update(url=url) or _Resp(200, {}))
+    monkeypatch.setenv("CRM_BASE_URL", "http://localhost:4000/")
+    monkeypatch.delenv("CRM_INGEST_TOKEN", raising=False)
+    crm_push.push_lead({})
+    assert captured["url"] == "http://localhost:4000/api/ingest/pipeline-lead"
+
+
+def test_push_lead_raises_on_error(monkeypatch):
+    import requests
+    monkeypatch.setattr(requests, "post", lambda url, **k: _Resp(500, text="boom"))
+    monkeypatch.setenv("CRM_BASE_URL", "https://crm.test")
+    with pytest.raises(RuntimeError):
+        crm_push.push_lead({})
+
+
+# ── env parsing ───────────────────────────────────────────────────────────
+def test_threshold_limit_enabled_env(monkeypatch):
+    monkeypatch.delenv("CRM_FIT_THRESHOLD", raising=False)
+    assert crm_push._threshold() == 70
+    monkeypatch.setenv("CRM_FIT_THRESHOLD", "85")
+    assert crm_push._threshold() == 85
+    monkeypatch.setenv("CRM_FIT_THRESHOLD", "junk")  # bad value falls back
+    assert crm_push._threshold() == 70
+
+    monkeypatch.setenv("CRM_PUSH_LIMIT", "5")
+    assert crm_push._limit() == 5
+
+    monkeypatch.delenv("CRM_BASE_URL", raising=False)
+    monkeypatch.delenv("CRM_PUSH_ENABLED", raising=False)
+    assert crm_push._enabled() is False
+    monkeypatch.setenv("CRM_BASE_URL", "https://x")
+    monkeypatch.setenv("CRM_PUSH_ENABLED", "yes")
+    assert crm_push._enabled() is True
+    monkeypatch.setenv("CRM_PUSH_ENABLED", "0")  # disabled even with a base URL
+    assert crm_push._enabled() is False
