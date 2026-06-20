@@ -1,8 +1,11 @@
 # AiCure POC — Deployment runbook (Render → AWS ECS Fargate + EFS)
 
-**Status: 2026-06-14.** Working branch `deploy/ecs-efs`. App code (Part A) and the
-security hardening are **done and committed**. **Pick up at Part B (AWS infra).**
-The branch is **not pushed** yet.
+**Status: 2026-06-20.** Now part of the **monorepo** (`github.com/cgvhbjk/aicure`,
+this app under `poc/`). App code (Part A) + security hardening are **done**;
+**pick up at Part B (AWS infra)**. Build the image with context `poc/`
+(`docker build -f poc/Dockerfile poc`). The multi-app deploy (CRM + POC on one
+domain) is the monorepo-root `render.yaml`; this runbook is the POC's standalone
+AWS path.
 
 ## Why this migration
 Render free tier has no persistent disk, so the 331 MB SQLite DB is rebuilt from
@@ -12,7 +15,7 @@ few records to a **durable** DB that survives redeploys. ECS Fargate + EFS gives
 that (the DB lives on an EFS volume). Chosen over App Runner (ephemeral disk) and
 RDS (SQLite can't multi-write).
 
-## What's already done (committed on `deploy/ecs-efs`)
+## What's already done (committed; now in the monorepo under `poc/`)
 **App code (Part A)**
 - `db.py` honors `AICURE_DB_PATH` + `AICURE_DB_NETWORK_FS=1` → `journal_mode=DELETE`,
   `mmap_size=0` (WAL and mmap are **unsafe over EFS/NFS** even when the PRAGMA reports success).
@@ -31,11 +34,11 @@ RDS (SQLite can't multi-write).
 
 ## Next steps — do these in order
 
-### 0. Push + local verify
+### 0. Local verify (code is already in the monorepo on `main`)
 ```
-git push -u origin deploy/ecs-efs
-git lfs pull
-.venv/bin/python -m pytest backend -q
+cd poc
+pip install -r backend/requirements-dev.txt
+python -m pytest backend -q
 ```
 
 Then build + run the image (only if Docker Desktop is running). Set a real

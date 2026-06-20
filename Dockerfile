@@ -1,6 +1,6 @@
 # Multi-stage build: frontend on Node, then everything on Python+Node base.
-# Used when Render's native Python runtime can't run npm. Switch render.yaml
-# to `runtime: docker` to use this.
+# Build context is the poc/ folder — the monorepo root render.yaml uses
+# runtime: docker with dockerContext ./poc. Same image deploys to AWS ECS.
 
 FROM node:20-slim AS frontend
 WORKDIR /app/frontend
