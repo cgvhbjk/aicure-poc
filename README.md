@@ -20,6 +20,8 @@ npm run dev             # opens at http://localhost:5173
 ```
 
 ## Deployment
-Production is migrating off Render to AWS ECS Fargate + EFS (for a durable,
-incrementally-updatable DB). See **[DEPLOY.md](DEPLOY.md)** for the runbook:
-current status, ordered next steps, required env vars, and cutover steps.
+This app is part of the **monorepo** (see the [root README](../README.md)) and
+deploys alongside the CRM on one domain via the root `render.yaml` — it's
+reverse-proxied at `/pipeline`. The standalone AWS ECS Fargate + EFS path (for a
+durable, incrementally-updatable DB) is in **[DEPLOY.md](DEPLOY.md)**: status,
+ordered next steps, required env vars, and cutover steps.

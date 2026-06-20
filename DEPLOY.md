@@ -30,7 +30,7 @@ RDS (SQLite can't multi-write).
   `/healthz` + `OPTIONS` exempt; loud startup warning when left open.
 - Per-request connection-leak guard; trial-merge `grant_trial_links` reassignment + undo;
   uploads persist to the EFS DB dir; constant-time admin-key compare; CORS-open startup warning.
-- Tests: `backend/test_query_builders.py` + `test_merge.py` + `conftest.py` — **44 pass**.
+- Tests: the `poc/backend` pytest suite (scoring, query builders, merge, CRM push) — **62 pass**.
 
 ## Next steps — do these in order
 
