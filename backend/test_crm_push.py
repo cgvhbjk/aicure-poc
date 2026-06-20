@@ -110,10 +110,35 @@ def test_run_pushes_and_stamps(conn, monkeypatch):
     _insert_trial(conn, id="r1")
 
     assert crm_push.run(conn) == 0
-    row = conn.execute("SELECT crm_lead_id, crm_pushed_at FROM trials WHERE id='r1'").fetchone()
+    row = conn.execute(
+        "SELECT crm_lead_id, crm_pushed_at, crm_push_action FROM trials WHERE id='r1'"
+    ).fetchone()
     assert row["crm_lead_id"] == "L-123"
     assert row["crm_pushed_at"]
+    assert row["crm_push_action"] == "created"
     # No longer a candidate (idempotent across runs).
+    assert crm_push.select_crm_candidates(conn) == []
+
+
+def test_run_stamps_suppressed_with_reason(conn, monkeypatch):
+    """A leadless 'suppressed' response is still stamped (so it's not re-pushed)
+    and records WHY in crm_push_action."""
+    monkeypatch.setenv("CRM_BASE_URL", "https://crm.test")
+    monkeypatch.setenv("CRM_PUSH_ENABLED", "1")
+    monkeypatch.setattr(
+        crm_push, "push_lead",
+        lambda payload: {"leadId": None, "action": "suppressed", "reason": "existing contact"},
+    )
+    _insert_trial(conn, id="s1")
+
+    assert crm_push.run(conn) == 0
+    row = conn.execute(
+        "SELECT crm_lead_id, crm_pushed_at, crm_push_action FROM trials WHERE id='s1'"
+    ).fetchone()
+    assert row["crm_lead_id"] is None
+    assert row["crm_pushed_at"]
+    assert row["crm_push_action"] == "suppressed:existing contact"
+    # Never reconsidered (the whole point of stamping a leadless suppression).
     assert crm_push.select_crm_candidates(conn) == []
 
 
@@ -127,6 +152,8 @@ def test_run_pushes_and_stamps(conn, monkeypatch):
         ("Smith", (None, "Smith")),
         ("Mary Anne Smith", ("Mary", "Smith")),
         ("Sean O'Brien, PhD, MPH", ("Sean", "O'Brien")),
+        ("Ba, Mohamed", ("Mohamed", "Ba")),  # surname collides with a credential token
+        ("Do, Anh", ("Anh", "Do")),
         ("", (None, None)),
         (None, (None, None)),
     ],

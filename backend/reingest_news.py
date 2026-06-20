@@ -13,6 +13,10 @@ try:
     import crm_push
     crm_push.run()
 except Exception as e:
+    # Mirror ingest.py: a run()-level failure here is systemic (import break,
+    # whole-DB locked, bad config), so print the full traceback — not just str(e).
+    import traceback
     print(f"CRM push ERROR: {e}")
+    traceback.print_exc()
 
 print("Done.")

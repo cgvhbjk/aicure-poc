@@ -407,8 +407,9 @@ def _init_db():
         # and when we pushed it. crm_pushed_at gates re-pushing the same row.
         "ALTER TABLE trials ADD COLUMN crm_lead_id TEXT",
         "ALTER TABLE trials ADD COLUMN crm_pushed_at TEXT",
-        "ALTER TABLE grants ADD COLUMN crm_lead_id TEXT",
-        "ALTER TABLE grants ADD COLUMN crm_pushed_at TEXT",
+        # The CRM's action/reason for this row (created | updated | suppressed:<why>)
+        # so a stamped-but-leadless row is explainable later, not a silent dead end.
+        "ALTER TABLE trials ADD COLUMN crm_push_action TEXT",
     ]:
         try:
             conn.execute(alter)

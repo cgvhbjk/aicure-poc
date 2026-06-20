@@ -5,7 +5,7 @@
 # reuses the accumulated DB (this is what makes incremental writes survive
 # redeploys). The copy MUST happen here, before uvicorn imports `db` — db._init_db()
 # opens AICURE_DB_PATH at import and would otherwise create empty tables first.
-set -e
+set -eu
 
 : "${AICURE_DB_PATH:=/data/aicure.db}"
 export AICURE_DB_PATH

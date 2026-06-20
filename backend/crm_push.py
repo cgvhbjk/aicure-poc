@@ -37,16 +37,20 @@ def _enabled():
 
 
 def _threshold():
+    raw = os.environ.get("CRM_FIT_THRESHOLD", "70")
     try:
-        return int(os.environ.get("CRM_FIT_THRESHOLD", "70"))
+        return int(raw)
     except ValueError:
+        print(f"[crm_push] invalid CRM_FIT_THRESHOLD={raw!r} — using 70")
         return 70
 
 
 def _limit():
+    raw = os.environ.get("CRM_PUSH_LIMIT", "100")
     try:
-        return int(os.environ.get("CRM_PUSH_LIMIT", "100"))
+        return int(raw)
     except ValueError:
+        print(f"[crm_push] invalid CRM_PUSH_LIMIT={raw!r} — using 100")
         return 100
 
 
@@ -70,7 +74,12 @@ def _split_name(full):
         words = seg.replace(".", "").lower().split()
         return bool(words) and all(w in _CREDENTIALS for w in words)
 
-    kept = [s for s in segments if not is_cred(s)]
+    # Credentials are post-nominal — strip them only from the END, never a leading
+    # name segment. Short credential tokens collide with real surnames ("Ba",
+    # "Do"), so dropping by membership anywhere would mangle "Ba, Mohamed".
+    while segments and is_cred(segments[-1]):
+        segments.pop()
+    kept = segments
     if not kept:
         return None, None
     if len(kept) >= 2:
@@ -190,10 +199,10 @@ def push_lead(payload):
     return resp.json()
 
 
-def mark_pushed(conn, trial_id, crm_lead_id):
+def mark_pushed(conn, trial_id, crm_lead_id, action=None):
     conn.execute(
-        "UPDATE trials SET crm_lead_id = ?, crm_pushed_at = ? WHERE id = ?",
-        (crm_lead_id, datetime.now(timezone.utc).isoformat(), trial_id),
+        "UPDATE trials SET crm_lead_id = ?, crm_pushed_at = ?, crm_push_action = ? WHERE id = ?",
+        (crm_lead_id, datetime.now(timezone.utc).isoformat(), action, trial_id),
     )
     conn.commit()
 
@@ -217,12 +226,18 @@ def run(conn=None):
         for t in candidates:
             try:
                 result = push_lead(build_payload(t, conn))
-                # Stamp even on suppressed/updated so we don't re-push next run.
-                mark_pushed(conn, t["id"], result.get("leadId"))
+                action = result.get("action")
+                reason = result.get("reason")
+                # Stamp even on suppressed/updated so we don't re-push next run —
+                # but record WHY (action[:reason]) so a leadless stamp is explainable.
+                stamped = f"{action}:{reason}" if reason else action
+                if stamped:
+                    stamped = stamped[:200]  # clamp unbounded upstream free text
+                mark_pushed(conn, t["id"], result.get("leadId"), stamped)
                 pushed += 1
                 print(
                     f"  + {t['id']} -> lead {result.get('leadId')} "
-                    f"({result.get('action')})"
+                    f"({action}{f' — {reason}' if reason else ''})"
                 )
             except Exception as e:  # noqa: BLE001 — keep the batch going
                 failed += 1
