@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -269,9 +270,20 @@ async def lifespan(app: FastAPI):
     print("[scheduler] Daily news job at 06:00 UTC, fit rescore at 07:00 UTC")
     if _APP_PASSWORD:
         print("[auth] App-level login enabled (AICURE_APP_PASSWORD set).")
+    elif os.environ.get("AICURE_ALLOW_OPEN") == "1":
+        print("[auth] WARNING: AICURE_APP_PASSWORD unset and AICURE_ALLOW_OPEN=1 — "
+              "the app is OPEN (no login on reads or mutations). Local dev only.")
     else:
-        print("[auth] WARNING: AICURE_APP_PASSWORD unset — the app is OPEN (no "
-              "login on reads or mutations). Set it in any internet-facing deploy.")
+        # Fail closed: the data carries real contact PII; refuse to serve it
+        # world-open by accident (e.g. an ECS deploy that forgot the secret —
+        # Render provisions it via render.yaml generateValue). Set
+        # AICURE_APP_PASSWORD to gate the app, or AICURE_ALLOW_OPEN=1 to run open
+        # on purpose (local dev). This runs in lifespan (app startup) only, so
+        # `import api` in the test suite is unaffected.
+        raise RuntimeError(
+            "Refusing to start: AICURE_APP_PASSWORD unset. Set it to gate the app, "
+            "or set AICURE_ALLOW_OPEN=1 to intentionally run with no login (local dev)."
+        )
     if _cors_origins == ["*"]:
         print("[cors] WARNING: AICURE_CORS_ORIGINS unset — allowing all origins "
               "(*). Pin it to the real origin in any internet-facing deploy.")
@@ -1119,7 +1131,14 @@ async def upload_file(
     conn.close()
 
     errors = result.get("errors", [])
+    # Partial success is legitimate (200), but a file where EVERY row failed must
+    # not look like success to a caller that only checks the status code — flag it
+    # explicitly. errors is truncated to the first 50 (error_count has the total).
+    all_failed = (
+        result["row_count"] > 0 and result["inserted"] == 0 and result["matched"] == 0
+    )
     return {
+        "status": "all_failed" if all_failed else "ok",
         "upload_id": upload_id,
         "filename": file.filename,
         "row_count": result["row_count"],
@@ -1127,6 +1146,7 @@ async def upload_file(
         "inserted": result["inserted"],
         "skipped": result["skipped"],
         "errors": errors[:50],
+        "errors_truncated": len(errors) > 50,
         "error_count": len(errors),
         "merge_candidates": result.get("merge_candidates", 0),
         "preview": result.get("preview", []),
@@ -1986,11 +2006,32 @@ def get_grant(grant_id: str):
 def admin_refresh_news(x_admin_key: str = Header(default="")):
     """Manually trigger a news refresh + cleanup. Protected by X-Admin-Key header."""
     _require_admin(x_admin_key)
+    # Hold the lock for the whole job, not just this check: releasing it here made
+    # the 409 "already in progress" guard decorative (a second call would acquire
+    # the just-freed lock and start a concurrent refresh). The worker releases it
+    # in finally.
     if not _news_refresh_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Refresh already in progress")
-    _news_refresh_lock.release()
-    thread = threading.Thread(target=run_daily_news, daemon=True)
-    thread.start()
+
+    def _refresh_job():
+        # run_daily_news re-raises on refresh failure ON PURPOSE; routing it
+        # through a daemon thread would otherwise re-hide that. The endpoint
+        # already returned {"started"}, so log the traceback or the operator who
+        # triggered the manual refresh never learns it failed.
+        try:
+            run_daily_news()
+        except Exception:
+            print("[admin] background news refresh FAILED:")
+            traceback.print_exc()
+        finally:
+            _news_refresh_lock.release()
+
+    try:
+        thread = threading.Thread(target=_refresh_job, daemon=True)
+        thread.start()
+    except Exception:
+        _news_refresh_lock.release()  # never leak the lock if the thread won't start
+        raise
     return {"status": "started", "message": "News refresh running in background"}
 
 
@@ -2042,7 +2083,18 @@ def admin_prune_old(
     if dry_run:
         trial_count, grant_count = prune_old(dry_run=True, cutoff_days=cutoff_days)
         return {"trials_pruned": trial_count, "grants_pruned": grant_count, "dry_run": True}
-    background_tasks.add_task(prune_old, dry_run=False, cutoff_days=cutoff_days)
+    def _prune_job():
+        # Destructive delete in the background: the caller already got
+        # {"started"}, so log the outcome (and any failure's traceback) — there's
+        # otherwise no durable record that the prune ran, partially ran, or died.
+        try:
+            t, g = prune_old(dry_run=False, cutoff_days=cutoff_days)
+            print(f"[admin] background prune done: {t} trials, {g} grants removed (cutoff_days={cutoff_days})")
+        except Exception:
+            print("[admin] background prune FAILED:")
+            traceback.print_exc()
+
+    background_tasks.add_task(_prune_job)
     return {"status": "started", "message": "Prune running in background", "dry_run": False}
 
 

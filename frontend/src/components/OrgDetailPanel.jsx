@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { getOrgTrials, getOrgContacts, addOrgContact, patchOrg } from '../api'
+import { safeHref } from '../utils/url'
 
 const ORG_TYPE_OPTIONS = ['PHARMA', 'BIOTECH', 'CRO', 'DCT_VENDOR', 'DIGITAL_HEALTH', 'RPM', 'TELEHEALTH', 'ACADEMIC', 'GOVERNMENT', 'OTHER']
 
@@ -174,13 +175,13 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
               {org.org_type && (
                 <span className="badge" style={typeStyle}>{org.org_type.replace(/_/g, ' ')}</span>
               )}
-              {org.website && (
-                <a href={org.website} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
+              {safeHref(org.website) && (
+                <a href={safeHref(org.website)} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
                   Website ↗
                 </a>
               )}
-              {org.linkedin_url && (
-                <a href={org.linkedin_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
+              {safeHref(org.linkedin_url) && (
+                <a href={safeHref(org.linkedin_url)} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
                   LinkedIn ↗
                 </a>
               )}
@@ -352,8 +353,8 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
                 </div>
                 <div style={{ display: 'flex', gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
                   {c.email && <a href={`mailto:${c.email}`} style={{ fontSize: 12 }}>{c.email}</a>}
-                  {c.linkedin_url && (
-                    <a href={c.linkedin_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
+                  {safeHref(c.linkedin_url) && (
+                    <a href={safeHref(c.linkedin_url)} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>
                       LinkedIn ↗
                     </a>
                   )}

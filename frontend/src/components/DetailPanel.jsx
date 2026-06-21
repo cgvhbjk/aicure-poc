@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { getTrial, getTrialNews, getTrialRegistries } from '../api'
+import { safeHref } from '../utils/url'
 
 const STATUS_STYLES = {
   RECRUITING:             { background: '#dcfce7', color: '#166534' },
@@ -277,8 +278,8 @@ export default function DetailPanel({ trial: trialRow, onClose }) {
                     <React.Fragment key={label}>
                       <span className="detail-field-label">{label}</span>
                       <span className="detail-field-value">
-                        {type === 'link' ? (
-                          <a href={value} target="_blank" rel="noopener noreferrer">
+                        {type === 'link' && safeHref(value) ? (
+                          <a href={safeHref(value)} target="_blank" rel="noopener noreferrer">
                             {value}
                           </a>
                         ) : (
@@ -342,7 +343,7 @@ export default function DetailPanel({ trial: trialRow, onClose }) {
                 <div className="news-card-source">{item.source}</div>
                 <a
                   className="news-card-title"
-                  href={item.url}
+                  href={safeHref(item.url)}
                   target="_blank"
                   rel="noopener noreferrer"
                 >

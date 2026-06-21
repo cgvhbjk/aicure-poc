@@ -10,8 +10,13 @@ const _prodBase =
     ? '/pipeline'
     : ''
 const _defaultBase = import.meta.env.PROD ? _prodBase : 'http://localhost:8000'
+// The resolved base axios uses — exported so direct-link builders (CSV export
+// hrefs, the filter-options fetch) hit the right place too, including the
+// /pipeline subpath in the proxied prod deploy. Components must use this rather
+// than re-deriving a base that forgets /pipeline.
+export const apiBase = import.meta.env.VITE_API_URL ?? _defaultBase
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? _defaultBase,
+  baseURL: apiBase,
   paramsSerializer: {
     serialize: (params) => {
       const sp = new URLSearchParams()

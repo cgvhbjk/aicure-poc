@@ -366,6 +366,16 @@ def _init_db():
         -- news_id were unindexed.
         CREATE INDEX IF NOT EXISTS idx_trial_news_links_news_id
             ON trial_news_links(news_id);
+        -- Hot trials filters/sorts that were full-scanning: status (IN filters,
+        -- GROUP BY in get_stats, crm_push + prune_old), aicure_fit (crm_push
+        -- ORDER BY + range), and the therapeutic_area/phase GROUP BYs. Grants got
+        -- tuned composites; trials only had the default-sort one.
+        CREATE INDEX IF NOT EXISTS idx_trials_status ON trials(status);
+        CREATE INDEX IF NOT EXISTS idx_trials_fit_id ON trials(aicure_fit DESC, id);
+        CREATE INDEX IF NOT EXISTS idx_trials_therapeutic_area ON trials(therapeutic_area);
+        CREATE INDEX IF NOT EXISTS idx_trials_phase ON trials(phase);
+        -- (the crm_push partial index is created after the ALTER loop below,
+        --  since crm_pushed_at is an ALTER-added column not present yet here)
     """)
     conn.commit()
     for alter in [
@@ -432,6 +442,20 @@ def _init_db():
         # Non-fatal to startup (only degrades "new this week" digest accuracy),
         # but log it rather than swallowing silently.
         print("[db] WARNING: first_seen backfill failed:")
+        import traceback
+        traceback.print_exc()
+    # Partial index matching crm_push.select_crm_candidates' hot predicate.
+    # Created here (not in the CREATE block above) because crm_pushed_at is an
+    # ALTER-added column that doesn't exist until the loop above has run.
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trials_crm_candidates "
+            "ON trials(aicure_fit DESC, id) "
+            "WHERE status = 'NOT_YET_RECRUITING' AND crm_pushed_at IS NULL"
+        )
+        conn.commit()
+    except sqlite3.Error:
+        print("[db] WARNING: idx_trials_crm_candidates creation failed:")
         import traceback
         traceback.print_exc()
     conn.close()

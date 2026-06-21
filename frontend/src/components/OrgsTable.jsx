@@ -3,6 +3,7 @@ import { AgGridReact } from 'ag-grid-react'
 import { getOrgs } from '../api'
 import OrgDetailPanel from './OrgDetailPanel'
 import { GRID_LOADING_TEMPLATE, GRID_EMPTY_TEMPLATE, gridErrorMessage } from '../utils/gridUi'
+import { safeHref } from '../utils/url'
 
 // Columns the backend can ORDER BY (mirrors ORG_SORTABLE_COLUMNS in api.py).
 const SORTABLE_FIELDS = new Set(['canonical_name', 'org_type', 'trial_count'])
@@ -29,8 +30,10 @@ function OrgTypeBadge({ value }) {
 function LinkCell({ value }) {
   if (!value) return null
   const display = value.replace(/^https?:\/\//, '').split('/')[0]
+  const href = safeHref(value)
+  if (!href) return <span>{display}</span>
   return (
-    <a href={value} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+    <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
       {display}
     </a>
   )

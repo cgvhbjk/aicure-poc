@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 
 from db import get_connection
+from registry_utils import upsert_trial
 
 PROTECTED_TRIAL_COLS = {
     "id", "registry_sources", "all_registry_ids", "ingested_at",
@@ -177,9 +178,9 @@ def _process_trials(rows: list, conn) -> dict:
 
 
 def _insert_trial(conn, cols: dict):
-    k = ", ".join(cols.keys())
-    p = ", ".join("?" * len(cols))
-    conn.execute(f"INSERT OR REPLACE INTO trials ({k}) VALUES ({p})", list(cols.values()))
+    # ON CONFLICT upsert (not INSERT OR REPLACE) so re-uploading a trial doesn't
+    # reset server-owned crm_pushed_at/_lead_id/_push_action + aicure_fit state.
+    upsert_trial(conn, cols)
 
 
 def _insert_merge_candidate(conn, a_id, b_id, score, match_fields, match_scores):

@@ -4,6 +4,7 @@ import os
 import re
 from datetime import datetime
 from db import get_connection
+from registry_utils import upsert_trial
 # Shared classifier / keyword-flag helper (was a divergent local copy here).
 from text_match import flag, classify_area
 
@@ -273,37 +274,25 @@ def pull_all():
             if not nct_id or nct_id in seen_ids:
                 continue
             seen_ids.add(nct_id)
-            conn.execute("""
-                INSERT OR REPLACE INTO trials (
-                    id, title_brief, title_official, registry_id, source_url, raw_snapshot_path,
-                    status, phase, study_type,
-                    sponsor, sponsor_type, cro_named, lead_country, countries, num_sites,
-                    randomized, masking, num_arms,
-                    conditions, interventions, therapeutic_area, mesh_terms,
-                    enrollment, min_age, max_age, sex_eligibility, is_pediatric,
-                    inclusion_criteria, exclusion_criteria,
-                    pi_name, pi_email,
-                    start_date, primary_completion, study_completion, first_posted, last_updated,
-                    primary_endpoints, secondary_endpoints,
-                    epro_ecoa, digital_biomarkers, dct_elements,
-                    brief_summary, has_news, ingested_at,
-                    registry_sources, all_registry_ids, euct_id, eudract_number, eu_member_states
-                ) VALUES (
-                    :id, :title_brief, :title_official, :registry_id, :source_url, :raw_snapshot_path,
-                    :status, :phase, :study_type,
-                    :sponsor, :sponsor_type, :cro_named, :lead_country, :countries, :num_sites,
-                    :randomized, :masking, :num_arms,
-                    :conditions, :interventions, :therapeutic_area, :mesh_terms,
-                    :enrollment, :min_age, :max_age, :sex_eligibility, :is_pediatric,
-                    :inclusion_criteria, :exclusion_criteria,
-                    :pi_name, :pi_email,
-                    :start_date, :primary_completion, :study_completion, :first_posted, :last_updated,
-                    :primary_endpoints, :secondary_endpoints,
-                    :epro_ecoa, :digital_biomarkers, :dct_elements,
-                    :brief_summary, :has_news, :ingested_at,
-                    :registry_sources, :all_registry_ids, :euct_id, :eudract_number, :eu_member_states
-                )
-            """, trial)
+            # ON CONFLICT upsert (not INSERT OR REPLACE) so a re-pull keeps the
+            # server-owned crm_pushed_at/_lead_id/_push_action + aicure_fit state;
+            # select only the registry-sourced columns from `trial`.
+            rec = {c: trial.get(c) for c in (
+                "id", "title_brief", "title_official", "registry_id", "source_url", "raw_snapshot_path",
+                "status", "phase", "study_type",
+                "sponsor", "sponsor_type", "cro_named", "lead_country", "countries", "num_sites",
+                "randomized", "masking", "num_arms",
+                "conditions", "interventions", "therapeutic_area", "mesh_terms",
+                "enrollment", "min_age", "max_age", "sex_eligibility", "is_pediatric",
+                "inclusion_criteria", "exclusion_criteria",
+                "pi_name", "pi_email",
+                "start_date", "primary_completion", "study_completion", "first_posted", "last_updated",
+                "primary_endpoints", "secondary_endpoints",
+                "epro_ecoa", "digital_biomarkers", "dct_elements",
+                "brief_summary", "has_news", "ingested_at",
+                "registry_sources", "all_registry_ids", "euct_id", "eudract_number", "eu_member_states",
+            )}
+            upsert_trial(conn, rec)
             new_count += 1
         conn.commit()
         print(f"    → {new_count} trials upserted")

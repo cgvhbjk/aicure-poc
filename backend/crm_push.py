@@ -18,6 +18,7 @@ run() at the end of a pipeline pass.
 """
 
 import os
+import traceback
 from datetime import datetime, timezone
 
 from db import get_connection
@@ -242,6 +243,10 @@ def run(conn=None):
             except Exception as e:  # noqa: BLE001 — keep the batch going
                 failed += 1
                 print(f"  ! {t['id']} push failed: {e}")
+                # str(e) alone hides a systemic bug (e.g. a KeyError in
+                # build_payload) vs. a one-off bad row — print the stack like
+                # ingest.py does for its step failures.
+                traceback.print_exc()
     finally:
         if own_conn:
             conn.close()

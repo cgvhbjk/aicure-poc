@@ -4,6 +4,7 @@ import re
 import time
 from datetime import datetime
 from db import get_connection
+from registry_utils import upsert_trial
 
 CTIS_SEARCH = "https://euclinicaltrials.eu/ctis-public-api/search"
 CTIS_DETAIL = "https://euclinicaltrials.eu/ctis-public-api/retrieve/{}"
@@ -182,21 +183,18 @@ def _upsert(conn, summary, detail):
         reg_sources.append("EU-CTR")
         all_ids.append(eudract_num)
 
-    conn.execute("""
-        INSERT OR REPLACE INTO trials (
-            id, title_brief, status, phase, sponsor,
-            start_date, registry_id, source_url,
-            registry_sources, all_registry_ids, euct_id, eu_member_states, eudract_number,
-            has_news, ingested_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-    """, (
-        trial_id, title, status, phase, sponsor,
-        start_date, ct_number, source_url,
-        json.dumps(reg_sources),
-        json.dumps(all_ids),
-        ct_number, eu_member_states, eudract_num,
-        ingested_at,
-    ))
+    # ON CONFLICT upsert (not INSERT OR REPLACE): a re-pull / cross-registry
+    # enrichment keeps server-owned crm_*/aicure_fit AND the richer columns a
+    # fuller puller (e.g. ct_puller) may have already set on this row.
+    upsert_trial(conn, {
+        "id": trial_id, "title_brief": title, "status": status, "phase": phase,
+        "sponsor": sponsor, "start_date": start_date, "registry_id": ct_number,
+        "source_url": source_url,
+        "registry_sources": json.dumps(reg_sources),
+        "all_registry_ids": json.dumps(all_ids),
+        "euct_id": ct_number, "eu_member_states": eu_member_states,
+        "eudract_number": eudract_num, "has_news": 0, "ingested_at": ingested_at,
+    })
     _upsert_registry_record(conn, trial_id, ct_number, raw_text, ingested_at)
 
 

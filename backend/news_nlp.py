@@ -31,7 +31,12 @@ def _cache():
         try:
             with open(_CACHE_PATH) as f:
                 _CACHE = json.load(f)
-        except Exception:
+        except FileNotFoundError:
+            _CACHE = {}  # first run — expected, stay quiet
+        except Exception as e:
+            # File present but unreadable (corrupt JSON / permissions): warn so a
+            # silently-reset cache that re-runs every LLM call is traceable.
+            print(f"[news_nlp] cache unreadable ({_CACHE_PATH}): {e} — starting empty")
             _CACHE = {}
     return _CACHE
 
@@ -43,8 +48,10 @@ def _cache_put(key, value):
         os.makedirs(os.path.dirname(_CACHE_PATH), exist_ok=True)
         with open(_CACHE_PATH, "w") as f:
             json.dump(c, f)
-    except Exception:
-        pass
+    except Exception as e:
+        # Disk-full / permission: the result is silently lost and will re-run
+        # (cost/latency). Log it instead of swallowing.
+        print(f"[news_nlp] cache write failed ({_CACHE_PATH}): {e}")
 
 # ── AiCure-relevant trial categories ─────────────────────────────────────────
 # What "applies to AiCure" means: a cardiometabolic / GLP-1-adjacent indication
@@ -147,6 +154,13 @@ def fetch_article_text(url, timeout=8, max_chars=6000):
         import requests
         from bs4 import BeautifulSoup
         resp = requests.get(url, headers=_FETCH_HEADERS, timeout=timeout)
+        if resp.status_code >= 400:
+            # A 404/403/500 returns an HTML error page; parsing it as "article
+            # text" silently feeds a "Page Not Found" body to the NLP relevance/
+            # extraction step (and caches it). Treat as no text.
+            print(f"[news_nlp] fetch {resp.status_code} for {url[:60]} — skipping")
+            _article_cache[url] = ""
+            return ""
         soup = BeautifulSoup(resp.text, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
             tag.decompose()

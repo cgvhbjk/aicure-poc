@@ -33,7 +33,8 @@ function loadViews(tab) {
   // Tab-scoped store already populated?
   const scoped = localStorage.getItem(keys.views)
   if (scoped) {
-    try { return JSON.parse(scoped) } catch {}
+    try { return JSON.parse(scoped) }
+    catch (e) { console.warn('[views] saved views unreadable — ignoring:', e) }
   }
   // One-time migration of the un-namespaced legacy key into the trials tab.
   if (tab === 'trials') {

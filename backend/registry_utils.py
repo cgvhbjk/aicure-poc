@@ -35,6 +35,35 @@ _PREFIX_MAP = {
     "EudraCT": "EUCTR",
 }
 
+# Server-owned trial columns a puller must NEVER reset on a re-pull. A full-row
+# write (INSERT OR REPLACE) nulls every column it doesn't name; clearing
+# crm_pushed_at — the idempotency gate in crm_push.select_crm_candidates — makes
+# an already-pushed trial re-qualify and get pushed to the CRM AGAIN as a
+# duplicate lead. aicure_fit (set by score_backfill) and the CRM hand-off stamps
+# are the same hazard. ON CONFLICT DO UPDATE only touches named columns; we also
+# exclude these from the SET so they survive even if a future column list adds
+# them. Mirrors grant_utils.upsert_grant's first_seen handling.
+_TRIAL_PRESERVE_ON_CONFLICT = {
+    "id", "crm_pushed_at", "crm_lead_id", "crm_push_action", "aicure_fit",
+}
+
+
+def upsert_trial(db, record: dict) -> None:
+    """INSERT a trial, or UPDATE it on id-conflict WITHOUT clobbering
+    server-owned state columns. Use this for every puller/processor write to
+    `trials` so a weekly re-pull of an already-pushed trial doesn't reset its
+    CRM hand-off state (which would re-push it as a duplicate lead). `db` is a
+    sqlite Connection or Cursor; the caller owns the transaction (commit)."""
+    cols = list(record.keys())
+    collist = ", ".join(cols)
+    placeholders = ", ".join("?" * len(cols))
+    updates = ", ".join(
+        f"{c}=excluded.{c}" for c in cols if c not in _TRIAL_PRESERVE_ON_CONFLICT
+    )
+    sql = f"INSERT INTO trials ({collist}) VALUES ({placeholders})"
+    sql += f" ON CONFLICT(id) DO UPDATE SET {updates}" if updates else " ON CONFLICT(id) DO NOTHING"
+    db.execute(sql, list(record.values()))
+
 # Status mapping checked in precedence order — more specific first so
 # "NOT_YET_RECRUITING" doesn't match "RECRUITING".
 _STATUS_PRECEDENCE = [
@@ -187,12 +216,9 @@ def merge_or_insert(record: dict, registry_name: str, registry_id: str,
         record["all_registry_ids"] = json.dumps([registry_id])
         record["ingested_at"] = datetime.utcnow().isoformat()
 
-        cols = ", ".join(record.keys())
-        placeholders = ", ".join("?" * len(record))
-        cur.execute(
-            f"INSERT OR REPLACE INTO trials ({cols}) VALUES ({placeholders})",
-            list(record.values()),
-        )
+        # ON CONFLICT upsert (not INSERT OR REPLACE) so a re-pulled registry
+        # trial keeps its server-owned crm_pushed_at/aicure_fit state.
+        upsert_trial(cur, record)
         existing_id = new_id
 
         # NCT cross-ref existed but target row didn't — queue a candidate

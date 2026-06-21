@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { AgGridReact } from 'ag-grid-react'
-import { getGrants } from '../api'
+import { getGrants, apiBase } from '../api'
 import GrantDetailPanel from './GrantDetailPanel'
 import FieldsPanel from './FieldsPanel'
 import FilterBar from './FilterBar'
 import { FUNDING_FILTER_FIELDS } from '../utils/conditions'
 import { attachGridStateListeners } from '../utils/gridEvents'
 import { GRID_LOADING_TEMPLATE, GRID_EMPTY_TEMPLATE, gridErrorMessage } from '../utils/gridUi'
+import { safeHref } from '../utils/url'
 
-// Mirror api.js: VITE_API_URL override wins, else same-origin in prod / the dev
-// backend. Used for the direct-link export + filter-options fetch below.
-const _API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '' : 'http://localhost:8000')
+// Resolved API base for the direct-link export + filter-options fetch below
+// (shared with api.js so it includes the /pipeline subpath in prod).
+const _API_BASE = apiBase
 
 // Columns the backend can ORDER BY (mirrors GRANT_SORTABLE_COLUMNS in api.py,
 // plus the precomputed aicure_fit). Any column outside this set is display-only;
@@ -118,9 +119,10 @@ function NctLink({ value }) {
 }
 
 function SourceUrlCell({ value }) {
-  if (!value) return null
+  const href = safeHref(value)
+  if (!href) return value ? <span title={value}>{String(value).slice(0, 50)}</span> : null
   return (
-    <a href={value} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+    <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
       title={value}>
       {value.replace(/^https?:\/\//, '').slice(0, 50)}
     </a>

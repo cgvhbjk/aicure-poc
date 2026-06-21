@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { getGrant, getGrantTrials } from '../api'
+import { safeHref } from '../utils/url'
 
 const STATUS_STYLES = {
   ACTIVE:     { background: '#dcfce7', color: '#166534' },
@@ -341,10 +342,10 @@ export default function GrantDetailPanel({ grant: grantRow, onClose, onSelectTri
           </div>
 
           {/* Source link */}
-          {grant.source_url && (
+          {safeHref(grant.source_url) && (
             <div style={{ marginBottom: 20 }}>
               <a
-                href={grant.source_url}
+                href={safeHref(grant.source_url)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn-sm"

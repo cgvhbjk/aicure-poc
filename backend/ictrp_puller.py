@@ -13,7 +13,7 @@ from datetime import datetime
 from db import get_connection
 from registry_utils import (
     extract_nct, is_relevant, merge_or_insert,
-    normalize_phase, normalize_status, snapshots_enabled,
+    normalize_phase, normalize_status, snapshots_enabled, upsert_trial,
 )
 
 SEARCH_TERMS = [
@@ -260,12 +260,9 @@ def pull_all_ictrp():
                             rec["registry_sources"] = json.dumps([registry_name])
                             rec["all_registry_ids"] = json.dumps([tid])
                             rec["ingested_at"] = datetime.utcnow().isoformat()
-                            cols = ", ".join(rec.keys())
-                            placeholders = ", ".join("?" * len(rec))
-                            conn.execute(
-                                f"INSERT OR REPLACE INTO trials ({cols}) VALUES ({placeholders})",
-                                list(rec.values()),
-                            )
+                            # ON CONFLICT upsert: a re-pull keeps server-owned
+                            # crm_*/aicure_fit state (INSERT OR REPLACE wiped it).
+                            upsert_trial(conn, rec)
                             total_inserted += 1
                         except Exception as e:
                             print(f"  [WARN] ICTRP insert error for {tid}: {e}")
