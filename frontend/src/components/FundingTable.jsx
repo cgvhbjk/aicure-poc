@@ -211,6 +211,7 @@ const DEFAULT_COL_DEF = { sortable: true, resizable: true, filter: false }
 
 function fmtMillions(n) {
   if (!n) return null
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`
   return `$${n.toLocaleString()}`
@@ -403,8 +404,11 @@ export default function FundingTable({
             <>
               {total.toLocaleString()} grants
               {totalFunding > 0 && (
-                <span style={{ marginLeft: 6, color: '#16a34a', fontWeight: 600 }}>
-                  · {fmtMillions(totalFunding)} total
+                <span
+                  style={{ marginLeft: 6, color: '#16a34a', fontWeight: 600 }}
+                  title="Sum of award amounts across the grants that disclose one — not every grant lists an amount"
+                >
+                  · {fmtMillions(totalFunding)} disclosed
                 </span>
               )}
             </>
