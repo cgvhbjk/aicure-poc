@@ -12,6 +12,13 @@ Config (all via env; absent-safe — a no-op when unconfigured, like the emailer
     CRM_INGEST_TOKEN    shared secret == the CRM's PIPELINE_INGEST_TOKEN
     CRM_FIT_THRESHOLD   minimum aicure_fit to push (0-100). Default 70.
     CRM_PUSH_LIMIT      max rows per run (protects deliverability). Default 100.
+    CRM_MIN_LEAD_DAYS   skip trials starting sooner than this — AiCure needs
+                        runway to engage the sponsor before the protocol locks.
+                        Default 182 (~6 months).
+    CRM_MAX_LEAD_DAYS   optional upper bound — skip trials starting LATER than
+                        this. Default 0 = no cap (any start at/after the floor
+                        qualifies). Set a positive day count to add a ceiling;
+                        set the floor to 0 as well to disable timing entirely.
 
 Run standalone (`python3 crm_push.py`) or let ingest.py / reingest_news.py call
 run() at the end of a pipeline pass.
@@ -22,8 +29,13 @@ import traceback
 from datetime import datetime, timezone
 
 from db import get_connection
+from scoring import _days_from_now  # dateutil-based; handles YYYY-MM, DD/MM/YYYY, etc.
 
 EXTERNAL_SOURCE = "Trial Pipeline"
+
+# Sentinel so callers can pass an explicit max_days=None (cap disabled) and still
+# be distinguished from "not supplied, read the env".
+_ENV = object()
 
 # Only pre-enrollment trials: the goal is to reach the sponsor BEFORE the trial
 # starts (mirrors emailer.EARLY_STAGE_TYPES). NOT_YET_RECRUITING is the one true
@@ -53,6 +65,55 @@ def _limit():
     except ValueError:
         print(f"[crm_push] invalid CRM_PUSH_LIMIT={raw!r} — using 100")
         return 100
+
+
+def _min_lead_days():
+    """Minimum days from now until a trial's start for it to qualify for
+    automated outreach. Trials starting sooner are skipped — AiCure needs runway
+    to engage the sponsor before the protocol locks. Default ~6 months."""
+    raw = os.environ.get("CRM_MIN_LEAD_DAYS", "182")
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"[crm_push] invalid CRM_MIN_LEAD_DAYS={raw!r} — using 182")
+        return 182
+
+
+def _max_lead_days():
+    """Optional upper bound on days from now until start. There is NO cap by
+    default — any start at/after the floor qualifies. Set CRM_MAX_LEAD_DAYS to a
+    positive day count to add a ceiling; 0/empty/invalid means uncapped.
+    Returns None when uncapped."""
+    raw = os.environ.get("CRM_MAX_LEAD_DAYS", "0").strip()
+    if raw == "":
+        return None
+    try:
+        v = int(raw)
+    except ValueError:
+        print(f"[crm_push] invalid CRM_MAX_LEAD_DAYS={raw!r} — leaving the cap off")
+        return None
+    return None if v <= 0 else v
+
+
+def _within_lead_window(start_date, min_days=_ENV, max_days=_ENV):
+    """True if start_date is far enough out (>= min_days) and not too far
+    (<= max_days, when capped). A missing/unparseable date does NOT qualify:
+    automated outreach must be able to confirm enough runway before the trial
+    starts. With no floor and no cap the window is off — everything qualifies."""
+    if min_days is _ENV:
+        min_days = _min_lead_days()
+    if max_days is _ENV:
+        max_days = _max_lead_days()
+    if min_days <= 0 and max_days is None:
+        return True  # timing window disabled
+    days = _days_from_now(start_date)
+    if days is None:
+        return False  # can't confirm timing → skip for automated outreach
+    if days < min_days:
+        return False
+    if max_days is not None and days > max_days:
+        return False
+    return True
 
 
 # Post-nominal credentials to drop ("Jane Powell, MD, PhD" -> "Jane Powell").
@@ -112,11 +173,19 @@ def _org_contact(conn, trial_id):
 
 
 def select_crm_candidates(conn, threshold=None, limit=None):
-    """High-fit, pre-start trials we haven't pushed yet (best fit first)."""
+    """High-fit, pre-start trials we haven't pushed yet (best fit first) whose
+    start date sits in the outreach lead-time window (see _within_lead_window):
+    far enough out that AiCure can still engage the sponsor, not so far it's
+    premature. Trials with no usable start date are skipped.
+
+    The window can't be expressed in SQL — start_date holds mixed formats
+    (YYYY-MM-DD, YYYY-MM, DD/MM/YYYY) that only dateutil parses — so we fetch the
+    (inherently small) pre-start/high-fit/unpushed pool and filter in Python
+    BEFORE applying the limit, so a near-term row can't crowd out a qualifying one."""
     threshold = _threshold() if threshold is None else threshold
     limit = _limit() if limit is None else limit
     placeholders = ",".join("?" for _ in EARLY_STAGE_STATUSES)
-    return conn.execute(
+    rows = conn.execute(
         f"""
         SELECT * FROM trials
         WHERE aicure_fit >= ?
@@ -124,10 +193,12 @@ def select_crm_candidates(conn, threshold=None, limit=None):
           AND sponsor IS NOT NULL AND sponsor != ''
           AND (crm_pushed_at IS NULL OR crm_pushed_at = '')
         ORDER BY aicure_fit DESC, id
-        LIMIT ?
         """,
-        (threshold, *EARLY_STAGE_STATUSES, limit),
+        (threshold, *EARLY_STAGE_STATUSES),
     ).fetchall()
+    min_days, max_days = _min_lead_days(), _max_lead_days()
+    eligible = [r for r in rows if _within_lead_window(r["start_date"], min_days, max_days)]
+    return eligible[:limit]
 
 
 def build_payload(trial, conn):
@@ -220,9 +291,11 @@ def run(conn=None):
     pushed = failed = 0
     try:
         candidates = select_crm_candidates(conn)
+        cap = _max_lead_days()
+        window = f"{_min_lead_days()}-{cap}d to start" if cap else f">= {_min_lead_days()}d to start"
         print(
             f"[crm_push] {len(candidates)} candidate trial(s) "
-            f"(fit >= {_threshold()}, pre-start, not yet pushed)."
+            f"(fit >= {_threshold()}, pre-start, {window}, not yet pushed)."
         )
         for t in candidates:
             try:

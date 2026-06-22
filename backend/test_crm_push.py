@@ -6,10 +6,16 @@ last-name floor so the CRM's required field is always satisfied), and that run()
 is a no-op until configured and stamps rows so they're never pushed twice. No
 network: push_lead is monkeypatched.
 """
+from datetime import date, timedelta
+
 import pytest
 
 import db
 import crm_push
+
+
+def _days_out(n):
+    return (date.today() + timedelta(days=n)).isoformat()
 
 
 def _insert_trial(conn, **over):
@@ -26,12 +32,21 @@ def _insert_trial(conn, **over):
         pi_name="Jane Q. Powell, MD",
         pi_email="jpowell@acmetx.com",
         aicure_fit=90,
+        start_date=_days_out(270),  # ~9 months out → inside the default outreach window
     )
     row.update(over)
     cols = ", ".join(row.keys())
     qs = ", ".join("?" for _ in row)
     conn.execute(f"INSERT INTO trials ({cols}) VALUES ({qs})", list(row.values()))
     conn.commit()
+
+
+@pytest.fixture(autouse=True)
+def _clear_lead_env(monkeypatch):
+    # Keep the lead-time window at its built-in defaults unless a test sets it,
+    # so an ambient CRM_MIN/MAX_LEAD_DAYS in the dev shell can't skew results.
+    monkeypatch.delenv("CRM_MIN_LEAD_DAYS", raising=False)
+    monkeypatch.delenv("CRM_MAX_LEAD_DAYS", raising=False)
 
 
 @pytest.fixture
@@ -53,6 +68,69 @@ def test_selection_filters(conn):
 
     ids = [r["id"] for r in crm_push.select_crm_candidates(conn, threshold=70, limit=100)]
     assert ids == ["good"]
+
+
+def test_selection_enforces_lead_floor(conn):
+    """Default is a 6-month FLOOR with no upper bound: trials starting too soon,
+    already started, or with no usable date are skipped; far-out ones qualify."""
+    _insert_trial(conn, id="toosoon", start_date=_days_out(30))    # < 6 months — skip
+    _insert_trial(conn, id="ok", start_date=_days_out(270))        # ~9 months — keep
+    _insert_trial(conn, id="farout", start_date=_days_out(900))    # >2 years — still keep (no cap)
+    _insert_trial(conn, id="nodate", start_date=None)              # can't confirm timing — skip
+    _insert_trial(conn, id="past", start_date=_days_out(-30))      # already started (stale NYR) — skip
+
+    ids = sorted(r["id"] for r in crm_push.select_crm_candidates(conn, threshold=70, limit=100))
+    assert ids == ["farout", "ok"]
+
+
+def test_lead_cap_is_opt_in(conn, monkeypatch):
+    """Setting CRM_MAX_LEAD_DAYS adds an upper bound on top of the floor."""
+    monkeypatch.setenv("CRM_MAX_LEAD_DAYS", "365")
+    _insert_trial(conn, id="ok", start_date=_days_out(270))
+    _insert_trial(conn, id="toofar", start_date=_days_out(500))
+    ids = [r["id"] for r in crm_push.select_crm_candidates(conn, threshold=70, limit=100)]
+    assert ids == ["ok"]
+
+
+def test_lead_floor_filters_before_limit(conn):
+    """A too-soon row must not consume the limit and crowd out a qualifying one."""
+    _insert_trial(conn, id="toosoon", aicure_fit=99, start_date=_days_out(10))  # highest fit, too soon
+    _insert_trial(conn, id="ok", aicure_fit=80, start_date=_days_out(200))
+    ids = [r["id"] for r in crm_push.select_crm_candidates(conn, threshold=70, limit=1)]
+    assert ids == ["ok"]
+
+
+def test_lead_window_parses_mixed_date_formats(conn):
+    """Registry start dates come as YYYY-MM and DD/MM/YYYY, not just ISO days."""
+    nine_mo = date.today() + timedelta(days=270)
+    _insert_trial(conn, id="month_only", start_date=nine_mo.strftime("%Y-%m"))
+    _insert_trial(conn, id="euct", start_date=nine_mo.strftime("%d/%m/%Y"))
+    ids = sorted(r["id"] for r in crm_push.select_crm_candidates(conn, threshold=70, limit=100))
+    assert ids == ["euct", "month_only"]
+
+
+def test_lead_window_can_be_disabled(conn, monkeypatch):
+    monkeypatch.setenv("CRM_MIN_LEAD_DAYS", "0")
+    monkeypatch.setenv("CRM_MAX_LEAD_DAYS", "0")  # 0 = no cap; with no floor, window is off
+    _insert_trial(conn, id="toosoon", start_date=_days_out(10))
+    _insert_trial(conn, id="nodate", start_date=None)
+    ids = sorted(r["id"] for r in crm_push.select_crm_candidates(conn, threshold=70, limit=100))
+    assert ids == ["nodate", "toosoon"]
+
+
+def test_min_max_lead_days_env(monkeypatch):
+    assert crm_push._min_lead_days() == 182
+    assert crm_push._max_lead_days() is None         # no cap by default
+    monkeypatch.setenv("CRM_MIN_LEAD_DAYS", "90")
+    assert crm_push._min_lead_days() == 90
+    monkeypatch.setenv("CRM_MIN_LEAD_DAYS", "junk")  # bad value falls back
+    assert crm_push._min_lead_days() == 182
+    monkeypatch.setenv("CRM_MAX_LEAD_DAYS", "365")   # opt in to a cap
+    assert crm_push._max_lead_days() == 365
+    monkeypatch.setenv("CRM_MAX_LEAD_DAYS", "0")     # 0 = no cap
+    assert crm_push._max_lead_days() is None
+    monkeypatch.setenv("CRM_MAX_LEAD_DAYS", "junk")  # invalid = no cap
+    assert crm_push._max_lead_days() is None
 
 
 def test_payload_prefers_pi(conn):
