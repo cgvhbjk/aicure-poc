@@ -105,17 +105,6 @@ def run():
         # exit 0 with unscored rows the grids then can't rank.
         failures.append(("Score backfill", str(e)))
 
-    # Hand high-fit, pre-start trials to the CRM for outreach (no-op unless
-    # CRM_PUSH_ENABLED + CRM_BASE_URL are configured). Runs after scoring so
-    # candidates have a fresh aicure_fit. Non-fatal: a CRM outage shouldn't
-    # fail an otherwise-good ingest.
-    try:
-        import crm_push
-        crm_push.run()
-    except Exception as e:
-        print(f"  CRM push ERROR: {e}")
-        traceback.print_exc()
-
     if failures:
         print("Failed steps:")
         for name, err in failures:

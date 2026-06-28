@@ -36,13 +36,13 @@ _PREFIX_MAP = {
 }
 
 # Server-owned trial columns a puller must NEVER reset on a re-pull. A full-row
-# write (INSERT OR REPLACE) nulls every column it doesn't name; clearing
-# crm_pushed_at — the idempotency gate in crm_push.select_crm_candidates — makes
-# an already-pushed trial re-qualify and get pushed to the CRM AGAIN as a
-# duplicate lead. aicure_fit (set by score_backfill) and the CRM hand-off stamps
-# are the same hazard. ON CONFLICT DO UPDATE only touches named columns; we also
-# exclude these from the SET so they survive even if a future column list adds
-# them. Mirrors grant_utils.upsert_grant's first_seen handling.
+# write (INSERT OR REPLACE) nulls every column it doesn't name. aicure_fit (set
+# by score_backfill) would be lost that way. The crm_* columns are vestigial
+# (the CRM push integration was removed when this app was split out of the
+# monorepo) but are preserved too so any stamps in the existing DB survive a
+# re-pull. ON CONFLICT DO UPDATE only touches named columns; we also exclude
+# these from the SET so they survive even if a future column list adds them.
+# Mirrors grant_utils.upsert_grant's first_seen handling.
 _TRIAL_PRESERVE_ON_CONFLICT = {
     "id", "crm_pushed_at", "crm_lead_id", "crm_push_action", "aicure_fit",
 }

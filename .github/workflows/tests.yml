@@ -1,0 +1,28 @@
+name: Tests
+
+# Least-privilege: the suite only reads the repo.
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          lfs: false          # the 300MB DB isn't needed; scoring tests are pure
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: '3.11'
+      # The full suite imports the FastAPI app (test_merge, test_query_builders),
+      # so install the app deps — not just the scorer's — or collection errors.
+      - name: Install test deps
+        run: pip install -r backend/requirements-dev.txt
+      - name: Run backend tests
+        working-directory: backend
+        run: python -m pytest -q

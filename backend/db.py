@@ -367,15 +367,15 @@ def _init_db():
         CREATE INDEX IF NOT EXISTS idx_trial_news_links_news_id
             ON trial_news_links(news_id);
         -- Hot trials filters/sorts that were full-scanning: status (IN filters,
-        -- GROUP BY in get_stats, crm_push + prune_old), aicure_fit (crm_push
-        -- ORDER BY + range), and the therapeutic_area/phase GROUP BYs. Grants got
-        -- tuned composites; trials only had the default-sort one.
+        -- GROUP BY in get_stats + prune_old), aicure_fit (ORDER BY + range), and
+        -- the therapeutic_area/phase GROUP BYs. Grants got tuned composites;
+        -- trials only had the default-sort one.
         CREATE INDEX IF NOT EXISTS idx_trials_status ON trials(status);
         CREATE INDEX IF NOT EXISTS idx_trials_fit_id ON trials(aicure_fit DESC, id);
         CREATE INDEX IF NOT EXISTS idx_trials_therapeutic_area ON trials(therapeutic_area);
         CREATE INDEX IF NOT EXISTS idx_trials_phase ON trials(phase);
-        -- (the crm_push partial index is created after the ALTER loop below,
-        --  since crm_pushed_at is an ALTER-added column not present yet here)
+        -- (the vestigial crm_* partial index is created after the ALTER loop
+        --  below, since crm_pushed_at is an ALTER-added column not present here)
     """)
     conn.commit()
     for alter in [
@@ -413,12 +413,12 @@ def _init_db():
         # score_backfill.py after each ingest.
         "ALTER TABLE grants ADD COLUMN aicure_fit INTEGER",
         "ALTER TABLE trials ADD COLUMN aicure_fit INTEGER",
-        # CRM hand-off (crm_push.py): the Lead id returned by the aicure-crm app
-        # and when we pushed it. crm_pushed_at gates re-pushing the same row.
+        # Vestigial CRM hand-off columns. The push integration (crm_push.py) was
+        # removed when this app was split out of the aicure monorepo; the columns
+        # are kept so the persistent DB doesn't need a destructive migration. They
+        # recorded the Lead id returned by the CRM and when/how we pushed it.
         "ALTER TABLE trials ADD COLUMN crm_lead_id TEXT",
         "ALTER TABLE trials ADD COLUMN crm_pushed_at TEXT",
-        # The CRM's action/reason for this row (created | updated | suppressed:<why>)
-        # so a stamped-but-leadless row is explainable later, not a silent dead end.
         "ALTER TABLE trials ADD COLUMN crm_push_action TEXT",
     ]:
         try:
@@ -444,9 +444,10 @@ def _init_db():
         print("[db] WARNING: first_seen backfill failed:")
         import traceback
         traceback.print_exc()
-    # Partial index matching crm_push.select_crm_candidates' hot predicate.
-    # Created here (not in the CREATE block above) because crm_pushed_at is an
-    # ALTER-added column that doesn't exist until the loop above has run.
+    # Vestigial partial index from the removed CRM hand-off (see the crm_* columns
+    # above). Harmless to keep; created here (not in the CREATE block above)
+    # because crm_pushed_at is an ALTER-added column that doesn't exist until the
+    # loop above has run.
     try:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_trials_crm_candidates "

@@ -1,0 +1,53 @@
+name: Daily news digest
+
+# Least-privilege: this workflow only calls an external HTTP endpoint, so the
+# GITHUB_TOKEN needs no scopes at all.
+permissions: {}
+
+# Single-flight: a scheduled fire and a manual run (or two crons overlapping a
+# slow Render cold-start) must not both refresh+send and double up the digest.
+concurrency:
+  group: daily-news-digest
+  cancel-in-progress: false
+
+# Drives the daily news digest from OUTSIDE the app, because the in-app
+# APScheduler can't fire while the free-tier Render service is asleep. This
+# request wakes the service, refreshes news, builds the digest, and emails it.
+on:
+  schedule:
+    # 13:00 UTC = 09:00 America/New_York while Eastern is on EDT (summer).
+    # GitHub cron is UTC and does NOT observe DST: after the fall-back
+    # (2026-11-01) 13:00 UTC becomes 08:00 EST, so bump this to '0 14 * * *'
+    # then to keep it arriving at 09:00 local (and back to '0 13' each spring).
+    - cron: '0 13 * * *'
+  workflow_dispatch:        # manual "Run workflow" button
+    inputs:
+      refresh:
+        description: "Refresh RSS before sending"
+        type: boolean
+        default: true
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wake service, refresh news, send digest
+        env:
+          BASE_URL: ${{ vars.RENDER_SERVICE_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+          REFRESH: ${{ github.event.inputs.refresh || 'true' }}
+        run: |
+          if [ -z "$BASE_URL" ]; then echo "::error::RENDER_SERVICE_URL repo variable not set"; exit 1; fi
+          if [ -z "$ADMIN_KEY" ]; then echo "::error::ADMIN_KEY secret not set"; exit 1; fi
+          url="$BASE_URL/admin/send-news-digest?refresh=$REFRESH"
+          echo "POST $url"
+          # --retry-all-errors + --retry-connrefused ride out Render cold-start
+          # (502/connection-refused while the service boots). --max-time caps
+          # each attempt; the endpoint runs refresh+send synchronously.
+          code=$(curl -sS -o resp.txt -w '%{http_code}' \
+            --max-time 300 --retry 4 --retry-all-errors --retry-connrefused --retry-delay 30 \
+            -X POST "$url" -H "X-Admin-Key: $ADMIN_KEY")
+          echo "HTTP $code"
+          echo "--- response ---"; cat resp.txt 2>/dev/null; echo
+          [ "$code" = "200" ] || { echo "::error::digest endpoint returned HTTP $code"; exit 1; }

@@ -1,11 +1,9 @@
 # AiCure POC — Deployment runbook (Render → AWS ECS Fargate + EFS)
 
-**Status: 2026-06-20.** Now part of the **monorepo** (`github.com/cgvhbjk/aicure`,
-this app under `poc/`). App code (Part A) + security hardening are **done**;
-**pick up at Part B (AWS infra)**. Build the image with context `poc/`
-(`docker build -f poc/Dockerfile poc`). The multi-app deploy (CRM + POC on one
-domain) is the monorepo-root `render.yaml`; this runbook is the POC's standalone
-AWS path.
+**Status: 2026-06-20.** This is a **standalone** repo (`github.com/cgvhbjk/aicure-poc`).
+App code (Part A) + security hardening are **done**; **pick up at Part B (AWS
+infra)**. Build the image from the repo root (`docker build -f Dockerfile .`).
+`render.yaml` is the single-service Render Blueprint; this runbook is the AWS path.
 
 ## Why this migration
 Render free tier has no persistent disk, so the 331 MB SQLite DB is rebuilt from
@@ -15,7 +13,7 @@ few records to a **durable** DB that survives redeploys. ECS Fargate + EFS gives
 that (the DB lives on an EFS volume). Chosen over App Runner (ephemeral disk) and
 RDS (SQLite can't multi-write).
 
-## What's already done (committed; now in the monorepo under `poc/`)
+## What's already done (committed)
 **App code (Part A)**
 - `db.py` honors `AICURE_DB_PATH` + `AICURE_DB_NETWORK_FS=1` → `journal_mode=DELETE`,
   `mmap_size=0` (WAL and mmap are **unsafe over EFS/NFS** even when the PRAGMA reports success).
@@ -30,13 +28,12 @@ RDS (SQLite can't multi-write).
   `/healthz` + `OPTIONS` exempt; loud startup warning when left open.
 - Per-request connection-leak guard; trial-merge `grant_trial_links` reassignment + undo;
   uploads persist to the EFS DB dir; constant-time admin-key compare; CORS-open startup warning.
-- Tests: the `poc/backend` pytest suite (scoring, query builders, merge, CRM push) — **62 pass**.
+- Tests: the `backend` pytest suite (scoring, query builders, merge) — passing.
 
 ## Next steps — do these in order
 
-### 0. Local verify (code is already in the monorepo on `main`)
+### 0. Local verify
 ```
-cd poc
 pip install -r backend/requirements-dev.txt
 python -m pytest backend -q
 ```
@@ -93,19 +90,6 @@ docker run --rm aicure:test sh -c "ls /app/backend/.env || echo ABSENT"
 | env | `AICURE_EMAIL_TO` | your recipient (currently benjaminhelfand@gmail.com) |
 | env (optional) | `AICURE_APP_USER` | Basic-auth username (default `aicure`) |
 | env (optional) | `ANTHROPIC_API_KEY` | enables LLM news classification |
-| env (optional) | `CRM_PUSH_ENABLED` | `1` to push high-fit, pre-start trials to the CRM as leads. Unset → `crm_push.run()` is a no-op. |
-| env (optional) | `CRM_BASE_URL` | the deployed aicure-crm origin, e.g. `https://crm.aicure.example` (no trailing `/api`). Required for the push. |
-| secret (optional) | `CRM_INGEST_TOKEN` | shared secret == the CRM's `PIPELINE_INGEST_TOKEN`. Sent as `X-Ingest-Token`. |
-| env (optional) | `CRM_FIT_THRESHOLD` | min `aicure_fit` to push (default `70`). |
-| env (optional) | `CRM_PUSH_LIMIT` | max rows pushed per run (default `100`). |
-
-### CRM hand-off (crm_push.py)
-After scoring, `ingest.py` (and the daily `reingest_news.py`) call
-`crm_push.run()`, which sends high-fit, **pre-start** (`NOT_YET_RECRUITING`)
-trials to the CRM's `POST /api/ingest/pipeline-lead`. Each pushed trial is
-stamped (`crm_lead_id`, `crm_pushed_at`) so it is never pushed twice. The CRM
-owns outreach (dedup, Seamless.AI email enrichment, send + tracking); see the
-aicure-crm README. Unconfigured = silent no-op, so this is safe to ship dark.
 
 ## Load-bearing constraints (do not break)
 - **Single writer.** `desiredCount=1` + min0/max100. Two tasks = divergent SQLite + double-fired schedulers.

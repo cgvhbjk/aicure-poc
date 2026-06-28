@@ -20,8 +20,8 @@ npm run dev             # opens at http://localhost:5173
 ```
 
 ## Deployment
-This app is part of the **monorepo** (see the [root README](../README.md)) and
-deploys alongside the CRM on one domain via the root `render.yaml` — it's
-reverse-proxied at `/pipeline`. The standalone AWS ECS Fargate + EFS path (for a
-durable, incrementally-updatable DB) is in **[DEPLOY.md](DEPLOY.md)**: status,
-ordered next steps, required env vars, and cutover steps.
+This is a **standalone** app. A single `render.yaml` Blueprint deploys it as one
+Docker web service (FastAPI backend + built React frontend on one domain); the
+same image also runs on AWS ECS Fargate + EFS (for a durable, incrementally
+updatable DB). See **[DEPLOY.md](DEPLOY.md)** for status, required env vars, and
+the ECS cutover steps.
