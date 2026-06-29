@@ -251,15 +251,19 @@ export default function FundingTable({
   // types / agency divisions). Fed to the inline FilterBar's ConditionBuilder via
   // `dynamicOptions` so the single consolidated filter covers them too — the old
   // duplicate checkbox sidebar was removed.
-  const [filterOptions, setFilterOptions] = useState({
-    activity_codes: [], org_types: [], research_types: [], agency_divisions: [],
-  })
+  const EMPTY_FILTER_OPTIONS = { activity_codes: [], org_types: [], research_types: [], agency_divisions: [] }
+  const [filterOptions, setFilterOptions] = useState(EMPTY_FILTER_OPTIONS)
+  const [filterOptionsError, setFilterOptionsError] = useState(false)
 
   useEffect(() => {
     fetch(`${_API_BASE}/grants/filter-options`)
-      .then((r) => r.json())
-      .then(setFilterOptions)
-      .catch(console.error)
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+      // Normalize on write so every key is ALWAYS an array regardless of the
+      // response shape — a partial/error body must not make `.length` throw on
+      // render (this is now the only path to these dropdowns since the sidebar
+      // was removed).
+      .then((d) => setFilterOptions({ ...EMPTY_FILTER_OPTIONS, ...(d && typeof d === 'object' ? d : {}) }))
+      .catch((e) => { console.error('Failed to load grant filter options', e); setFilterOptionsError(true) })
   }, [])
 
   // All grant filtering now flows through the inline FilterBar (compiled in
@@ -330,15 +334,16 @@ export default function FundingTable({
   useEffect(() => () => { disposeGridListenersRef.current?.() }, [])
 
   // Dynamic option arrays handed to the inline FilterBar (keys match the
-  // `dynamic` names on FUNDING_FILTER_FIELDS).
-  const dynamicOptions = {
-    org_types: filterOptions.org_types.length
+  // `dynamic` names on FUNDING_FILTER_FIELDS). Memoized + optional-chained so a
+  // partial response can't crash render and the object is stable across renders.
+  const dynamicOptions = useMemo(() => ({
+    org_types: filterOptions.org_types?.length
       ? filterOptions.org_types
       : ['ACADEMIC', 'INDUSTRY', 'NONPROFIT', 'GOVERNMENT', 'OTHER'],
     activity_codes: filterOptions.activity_codes || [],
     research_types: filterOptions.research_types || [],
     agency_divisions: filterOptions.agency_divisions || [],
-  }
+  }), [filterOptions])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -360,6 +365,15 @@ export default function FundingTable({
           filterFields={FUNDING_FILTER_FIELDS}
           dynamicOptions={dynamicOptions}
         />
+
+        {filterOptionsError && (
+          <span
+            style={{ fontSize: 11, color: '#b45309' }}
+            title="Couldn't load grant filter options from the server — org-type / award-type / etc. dropdowns may be incomplete. Defaults are shown for org type."
+          >
+            ⚠ filter options unavailable
+          </span>
+        )}
 
         <span className="toolbar-sep" />
         <button className="btn-sm" onClick={onExport}>Export CSV</button>

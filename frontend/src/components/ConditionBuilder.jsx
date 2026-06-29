@@ -132,7 +132,9 @@ export default function ConditionBuilder({ initialCondition, onApply, onCancel, 
                 </label>
               ))}
               {filteredOptions.length === 0 && (
-                <div style={{ fontSize: 12, color: '#94a3b8', padding: '4px 0' }}>No matches</div>
+                <div style={{ fontSize: 12, color: '#94a3b8', padding: '4px 0' }}>
+                  {options.length === 0 ? 'No options available' : 'No matches'}
+                </div>
               )}
             </div>
           </div>

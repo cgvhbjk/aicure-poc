@@ -436,9 +436,10 @@ def _init_db():
         # Human-subjects flag for grants (§3a). Default 1 so pre-existing rows
         # aren't retroactively excluded; new ingests set it from the abstract.
         "ALTER TABLE grants ADD COLUMN human_subjects INTEGER DEFAULT 1",
-        # Marks an org as an existing/known AiCure customer (§6) so the
-        # Organizations tab can filter and the scorer can boost their trials.
-        "ALTER TABLE organizations ADD COLUMN is_customer INTEGER DEFAULT 0",
+        # Set to 1 by patch_org when an analyst manually edits org_type, so the
+        # ingest's auto-reclassification (org_extractor.extract_from_trials) skips
+        # it and the manual value (CRO / DCT_VENDOR / …) isn't reverted each run.
+        "ALTER TABLE organizations ADD COLUMN org_type_locked INTEGER DEFAULT 0",
     ]:
         try:
             conn.execute(alter)

@@ -23,7 +23,7 @@ Off-target leads are SUPPRESSED (scored 0 with an "excluded: …" reason) rather
 merely down-ranked, so the sorted grids/digests stay tight.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from dateutil.parser import parse as dateparse
 
 from text_match import ONCOLOGY_CUES, CNS_PSYCH_CUES, NEURO_CUES
@@ -48,8 +48,10 @@ def _days_from_now(date_str):
         d = dateparse(str(date_str))
         if d.tzinfo:
             d = d.replace(tzinfo=None)
-        return (d - datetime.utcnow()).days
-    except Exception:
+        # naive UTC "now" (datetime.utcnow() is deprecated / removal-tracked).
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        return (d - now).days
+    except (ValueError, OverflowError, TypeError):
         return None
 
 
@@ -151,11 +153,10 @@ def _trial_aicure_fit(t):
     patch_only = _is_patch_only(text)
     if any(k in text for k in _SELF_ADMIN_CUES) and not patch_only:
         base = 26
+        why.append("self-administered (adherence)")
         if _adherence_risk(text, area):
             base += 8          # adherence-fragile population — AiCure's sweet spot
-            why.append("self-administered (adherence)")
-        else:
-            why.append("self-administered (adherence)")
+            why.append("adherence-fragile population")   # makes the +8 visible in the why
         pts += base; has = True
     elif patch_only:
         pts -= 6; why.append("transdermal patch — no pill touchpoint")
@@ -207,7 +208,7 @@ def _geo_fit(country, registry_sources=None):
         return -12, "outside US/EU"
     try:
         regs = json.loads(registry_sources or "[]")
-    except Exception:
+    except (ValueError, TypeError):
         regs = [registry_sources] if registry_sources else []
     for r in regs:
         if r in _REG_GEO:
@@ -354,7 +355,7 @@ def _illustrative_trial_score(t):
     # 6. Source strength / confidence / contactability.
     try:
         n_reg = len(json.loads(t["registry_sources"] or "[]"))
-    except Exception:
+    except (ValueError, TypeError):
         n_reg = 1
     if n_reg >= 2: s += 4; why.append(f"{n_reg} registries")
     s += sum(1 for f in (t["sponsor"], t["start_date"], t["enrollment"],

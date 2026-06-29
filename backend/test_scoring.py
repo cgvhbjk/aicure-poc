@@ -264,3 +264,35 @@ def test_grant_cns_adherence_beats_metabolic():
         abstract="A clinical trial of medication adherence in patients with "
                  "diabetes taking oral therapy. " + "x" * 250)
     assert score_grant(cns) > score_grant(metabolic)
+
+
+# ── therapeutic-area taxonomy must stay consistent across the 3 files ──────────
+
+def test_area_taxonomy_consistent():
+    """Every area classify_area can emit must have a scoring._AREA_FIT entry, and
+    every non-Other area must have a news_nlp._AREA_TO_CATEGORY entry. Guards the
+    silent -14 'off-core' penalty / 'Off-focus' label a mismatch would otherwise
+    apply with no error (the 4-file split flagged in review)."""
+    import news_nlp
+    import text_match
+
+    KNOWN_AREAS = {
+        "Other", "CNS / Psychiatry", "Neurology", "Metabolic / GLP-1", "Diabetes",
+        "Cardiovascular", "Liver / NASH", "Renal", "Adherence / Outcomes",
+    }
+    for area in KNOWN_AREAS:
+        assert area in scoring._AREA_FIT, f"{area!r} missing from scoring._AREA_FIT"
+    for area in KNOWN_AREAS - {"Other"}:
+        assert area in news_nlp._AREA_TO_CATEGORY, \
+            f"{area!r} missing from news_nlp._AREA_TO_CATEGORY"
+
+    # classify_area must never return a bucket outside the known taxonomy.
+    samples = [
+        "schizophrenia antipsychotic trial", "parkinson disease therapy",
+        "obesity glp-1 weight loss", "type 2 diabetes insulin",
+        "heart failure cardiovascular", "nash fatty liver", "chronic kidney disease",
+        "medication adherence outcomes", "lung cancer tumor oncology",
+        "completely unrelated subject matter",
+    ]
+    for s in samples:
+        assert text_match.classify_area(s) in KNOWN_AREAS

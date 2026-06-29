@@ -13,7 +13,7 @@ import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, Query, HTTPException, Header, UploadFile, File, Form, BackgroundTasks, Response
+from fastapi import FastAPI, Query, HTTPException, Header, UploadFile, File, Form, BackgroundTasks, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -63,6 +63,25 @@ def _require_admin(x_admin_key: str):
     Constant-time compare so the key can't be recovered by timing the response."""
     if not _ADMIN_KEY or not hmac.compare_digest(x_admin_key, _ADMIN_KEY):
         raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def _require_enrich_auth(request: Request, x_admin_key: str):
+    """Authorize the (credit-spending) enrichment route.
+
+    Accepts either the service admin key (the cron/automation credential) OR a
+    valid app-password session — the same HTTP Basic auth the _app_auth
+    middleware already enforces app-wide. This is why the SPA does NOT embed an
+    admin key in its public bundle (VITE_* vars ship to every browser): the
+    browser's cached Basic-auth header authorizes the call automatically,
+    same-origin. When neither gate is configured (local dev / tests) the app is
+    already open, so allow."""
+    if _ADMIN_KEY and hmac.compare_digest(x_admin_key, _ADMIN_KEY):
+        return
+    if _APP_PASSWORD and _valid_basic_auth(request.headers.get("Authorization", "")):
+        return
+    if not _APP_PASSWORD and not _ADMIN_KEY:
+        return  # nothing configured to gate against (matches the app-open posture)
+    raise HTTPException(status_code=403, detail="Forbidden")
 
 
 def _valid_basic_auth(authorization: str) -> bool:
@@ -971,24 +990,28 @@ def add_org_contact(org_id: str, body: ContactCreate):
 
 
 @app.post("/orgs/{org_id}/enrich-contacts")
-def enrich_org_contacts_route(org_id: str, force_refresh: bool = False,
+def enrich_org_contacts_route(org_id: str, request: Request,
+                              force_refresh: bool = False,
                               x_admin_key: str = Header(default="")):
     """Enrich an org's contacts with CMO / clinical decision-makers via Seamless.AI
-    (§7). Admin-guarded (it can spend Seamless credits). Served from the credit
-    cache when possible; returns api_calls=0 when no credits were spent. No-ops
-    cleanly when SEAMLESS_API_KEY is unset."""
-    _require_admin(x_admin_key)
+    (§7). Authorized by the app-password session or the service admin key (it can
+    spend Seamless credits). Served from the credit cache when possible; returns
+    api_calls=0 when no credits were spent. No-ops cleanly when SEAMLESS_API_KEY
+    is unset."""
+    _require_enrich_auth(request, x_admin_key)
     from seamless import enrich_org_contacts
     result = enrich_org_contacts(org_id, force_refresh=force_refresh)
     if not result.get("ok") and result.get("error") == "organization not found":
         raise HTTPException(status_code=404, detail="Organization not found")
     # Return the refreshed contact list alongside the enrichment status.
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM org_contacts WHERE org_id = ? ORDER BY is_decision_maker DESC, full_name",
-        (org_id,),
-    ).fetchall()
-    conn.close()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM org_contacts WHERE org_id = ? ORDER BY is_decision_maker DESC, full_name",
+            (org_id,),
+        ).fetchall()
+    finally:
+        conn.close()
     return {"status": result, "contacts": [row_to_dict(r) for r in rows]}
 
 
@@ -1007,6 +1030,10 @@ def patch_org(org_id: str, body: OrgUpdate):
         return row_to_dict(row)
 
     set_clauses = ", ".join(f"{k} = ?" for k in updates)
+    # A manual org_type edit pins the classification (org_type_locked=1) so the
+    # next ingest's auto-reclassification won't revert it.
+    if "org_type" in updates:
+        set_clauses += ", org_type_locked = 1"
     conn.execute(
         f"UPDATE organizations SET {set_clauses} WHERE id = ?",
         list(updates.values()) + [org_id],

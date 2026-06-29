@@ -17,7 +17,8 @@ message (mirrors news_nlp / emailer fallbacks), so the app + tests run unchanged
 import os
 import json
 import hashlib
-from datetime import datetime, timedelta
+import threading
+from datetime import datetime, timedelta, timezone
 
 from db import get_connection
 
@@ -36,8 +37,31 @@ _DECISION_MAKER_TITLES = [
 ]
 
 _TTL_DAYS = int(os.environ.get("AICURE_SEAMLESS_TTL_DAYS", "90"))
+# A FAILED lookup (HTTP/transport error) still bills a credit, so we cache it —
+# but with a short TTL so a transient outage can be retried tomorrow while an
+# immediate retry storm doesn't re-bill within the window.
+_ERROR_TTL_DAYS = int(os.environ.get("AICURE_SEAMLESS_ERROR_TTL_DAYS", "1"))
 _API_URL = os.environ.get("SEAMLESS_API_URL",
                           "https://api.seamless.ai/v1/search/contacts")
+
+# Per-org locks: serialize the read→API→write critical section so two concurrent
+# enrichments of the same org (or a force_refresh racing a normal call) can't
+# both miss the cache and both spend a credit.
+_locks_guard = threading.Lock()
+_org_locks: dict = {}
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _org_lock(cache_key: str) -> threading.Lock:
+    with _locks_guard:
+        lk = _org_locks.get(cache_key)
+        if lk is None:
+            lk = threading.Lock()
+            _org_locks[cache_key] = lk
+        return lk
 
 
 def is_enabled() -> bool:
@@ -72,6 +96,11 @@ def _call_seamless(org_name: str):
     resp.raise_for_status()
     data = resp.json() or {}
     raw = data.get("contacts") or data.get("data") or []
+    # A 200 with a non-empty body but no parseable contacts means Seamless changed
+    # its response shape (e.g. nested the list under a new key). We still got
+    # billed, so surface it rather than silently caching an empty result.
+    if not raw and data:
+        print(f"[seamless] 200 response with no parseable contacts; keys={list(data)[:10]}")
     credits = data.get("creditsUsed")
     if credits is None:
         credits = len(raw)
@@ -89,7 +118,12 @@ def _call_seamless(org_name: str):
 
 
 def _cached_contacts(conn, cache_key):
-    """Return cached contacts if a fresh (within TTL) entry exists, else None."""
+    """Return cached contacts (a list) if a fresh entry exists, else None.
+
+    A corrupt row is logged and treated as a MISS would re-spend a credit, so the
+    log makes a systematically-bad cache visible instead of silently bleeding
+    credits. Error markers (failed lookups) expire on a shorter TTL and are served
+    as an empty list within that window so an immediate retry doesn't re-bill."""
     row = conn.execute(
         "SELECT response_json, fetched_at FROM seamless_cache WHERE cache_key = ?",
         (cache_key,),
@@ -98,19 +132,33 @@ def _cached_contacts(conn, cache_key):
         return None
     try:
         fetched = datetime.fromisoformat(row["fetched_at"])
-    except Exception:
+    except (ValueError, TypeError) as e:
+        print(f"[seamless] corrupt fetched_at for {cache_key} ({e}); treating as miss")
         return None
-    if datetime.utcnow() - fetched > timedelta(days=_TTL_DAYS):
-        return None
+    if fetched.tzinfo is None:                      # tolerate legacy naive rows
+        fetched = fetched.replace(tzinfo=timezone.utc)
+    age = _utcnow() - fetched
     try:
-        return json.loads(row["response_json"] or "[]")
-    except Exception:
+        data = json.loads(row["response_json"] or "[]")
+    except (ValueError, TypeError) as e:
+        print(f"[seamless] corrupt response_json for {cache_key} ({e}); treating as miss")
         return None
+    if isinstance(data, dict) and "error" in data:
+        # A cached failed lookup: serve as empty within the short error-TTL (no
+        # re-bill), then expire so a later retry can try the API again.
+        return [] if age <= timedelta(days=_ERROR_TTL_DAYS) else None
+    if not isinstance(data, list):
+        print(f"[seamless] unexpected cache shape for {cache_key} "
+              f"({type(data).__name__}); treating as miss")
+        return None
+    if age > timedelta(days=_TTL_DAYS):
+        return None
+    return data
 
 
 def _upsert_contacts(conn, org_id, contacts):
     """Insert contacts not already present for the org. Returns inserted count."""
-    now = datetime.utcnow().isoformat()
+    now = _utcnow().isoformat()
     inserted = 0
     for c in contacts:
         name = c.get("full_name")
@@ -137,7 +185,16 @@ def _upsert_contacts(conn, org_id, contacts):
     return inserted
 
 
-def enrich_org_contacts(org_id, force_refresh=False):
+def _cache_put(conn, ck, org_id, payload, contact_count, credits):
+    conn.execute(
+        """INSERT OR REPLACE INTO seamless_cache
+           (cache_key, org_id, response_json, contact_count, credits_used, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (ck, org_id, json.dumps(payload), contact_count, credits, _utcnow().isoformat()),
+    )
+
+
+def enrich_org_contacts(org_id, force_refresh: bool = False) -> dict:
     """Enrich one org's contacts, serving from the credit cache when possible.
 
     Returns a status dict incl. `api_calls` (0 when served from cache or no key),
@@ -153,33 +210,41 @@ def enrich_org_contacts(org_id, force_refresh=False):
         org_name = org["canonical_name"]
         ck = _cache_key(org_name)
 
-        if not force_refresh:
-            cached = _cached_contacts(conn, ck)
-            if cached is not None:
-                inserted = _upsert_contacts(conn, org_id, cached)
+        # Serialize the whole read→API→write section per org so concurrent calls
+        # (or a force_refresh racing a normal call) can't both spend a credit.
+        with _org_lock(ck):
+            if not force_refresh:
+                cached = _cached_contacts(conn, ck)
+                if cached is not None:
+                    inserted = _upsert_contacts(conn, org_id, cached)
+                    conn.commit()
+                    return {"ok": True, "source": "cache", "contacts": len(cached),
+                            "inserted": inserted, "api_calls": 0}
+
+            if not is_enabled():
+                return {"ok": False, "source": "none", "api_calls": 0,
+                        "error": "SEAMLESS_API_KEY not set — enrichment skipped"}
+
+            try:
+                contacts, credits = _call_seamless(org_name)
+            except Exception as e:
+                # Seamless bills a credit even on a failed/HTTP-error lookup, so
+                # persist a short-TTL error marker: an immediate retry serves it
+                # (no re-bill), a retry after the error-TTL hits the API again.
+                _cache_put(conn, ck, org_id, {"error": str(e)[:200]}, 0, None)
                 conn.commit()
-                return {"ok": True, "source": "cache", "contacts": len(cached),
-                        "inserted": inserted, "api_calls": 0}
+                print(f"[seamless] lookup failed for {org_name!r}: {e}")
+                return {"ok": False, "source": "seamless-error",
+                        "error": str(e), "api_calls": 1}
 
-        if not is_enabled():
-            return {"ok": False, "source": "none", "api_calls": 0,
-                    "error": "SEAMLESS_API_KEY not set — enrichment skipped"}
-
-        contacts, credits = _call_seamless(org_name)
-        # Keep only clinical decision-maker titles.
-        contacts = [c for c in contacts if _title_matches(c.get("title"))]
-        # Persist the result — INCLUDING an empty list — so we never re-pay credits
-        # for this org within the TTL.
-        conn.execute(
-            """INSERT OR REPLACE INTO seamless_cache
-               (cache_key, org_id, response_json, contact_count, credits_used, fetched_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (ck, org_id, json.dumps(contacts), len(contacts), credits,
-             datetime.utcnow().isoformat()),
-        )
-        inserted = _upsert_contacts(conn, org_id, contacts)
-        conn.commit()
-        return {"ok": True, "source": "seamless", "contacts": len(contacts),
-                "inserted": inserted, "credits_used": credits, "api_calls": 1}
+            # Keep only clinical decision-maker titles.
+            contacts = [c for c in contacts if _title_matches(c.get("title"))]
+            # Persist the result — INCLUDING an empty list — so we never re-pay
+            # credits for this org within the TTL.
+            _cache_put(conn, ck, org_id, contacts, len(contacts), credits)
+            inserted = _upsert_contacts(conn, org_id, contacts)
+            conn.commit()
+            return {"ok": True, "source": "seamless", "contacts": len(contacts),
+                    "inserted": inserted, "credits_used": credits, "api_calls": 1}
     finally:
         conn.close()

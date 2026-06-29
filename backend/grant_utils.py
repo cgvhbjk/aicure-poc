@@ -55,11 +55,15 @@ CONDITION_KEYWORDS = [
 # whose abstract is dominated by animal/basic-science cues with no human-subjects
 # signal. Conservative: a grant with ANY explicit human cue is kept.
 _ANIMAL_CUES = [
-    "mouse", "mice", "murine", " rat ", " rats ", "rodent", "zebrafish",
+    "mouse", "mice", "murine", "rodent", "zebrafish",
     "drosophila", "in vitro", "in-vitro", "preclinical", "pre-clinical",
-    "animal model", "animal models", "cell line", "cell lines", "xenograft",
+    "animal model", "cell line", "xenograft",
     "knockout", "transgenic", "c. elegans", "non-human primate",
 ]
+# Short ambiguous tokens matched on WORD BOUNDARIES so "rat"/"rats" catch
+# "rat." / "rats," / "rat-derived" (which the old space-padded " rat " missed)
+# without hiding inside "strategy" / "operate".
+_ANIMAL_WORD_CUES = [re.compile(r"\brats?\b")]
 _HUMAN_CUES = [
     "patient", "participant", "human subject", "clinical trial", "adults",
     "volunteers", "in humans", "human participants", "enrolled", "randomized",
@@ -81,7 +85,8 @@ def is_human_subjects(text: str) -> bool:
     has_human = any(c in t for c in _HUMAN_CUES)
     if has_human:
         return True
-    has_animal = any(c in t for c in _ANIMAL_CUES)
+    has_animal = (any(c in t for c in _ANIMAL_CUES)
+                  or any(p.search(t) for p in _ANIMAL_WORD_CUES))
     return not has_animal
 
 

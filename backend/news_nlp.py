@@ -83,6 +83,11 @@ _AREA_TO_CATEGORY = {
 }
 _CORE_AREAS = set(_AREA_TO_CATEGORY) - {"Adherence / Outcomes"}
 
+# Acquisitions ride their own digest stream ("this got bought — why?"), so the
+# category is intentionally NOT a member of AICURE_CATEGORIES / the LLM enum.
+# Single source of truth so the rules path and the emailer can't drift.
+ACQUISITION_CATEGORY = "Acquisition / M&A"
+
 # ── geography detection ───────────────────────────────────────────────────────
 _GEO_TERMS = [
     ("United States", "US"), ("U.S.", "US"), (" US ", "US"), ("USA", "US"),
@@ -207,6 +212,15 @@ def analyze(item, use_llm=None, full_text=None):
                   est_size, geography, sponsor_org, not_yet_started (bool),
                   fit_reason, fit_signals, signal_phrase, method.
     """
+    # Acquisitions are handled by the deterministic rules path REGARDLESS of the
+    # configured LLM backend: the acquirer/target/rationale extraction and the
+    # "Acquisition / M&A" category live only in _analyze_rules, and the LLM schema
+    # doesn't model them. Routing M&A items through the LLM (the deploy default
+    # when a key is set) would silently drop those fields and the emailer's M&A
+    # cards would render blank. So short-circuit before backend resolution.
+    if (item.get("event_type") or "") == "acquisition":
+        return _analyze_rules(item, full_text)
+
     backend = _resolve_backend(use_llm)
     url = item.get("url")
     cache_key = f"{backend}:{url}" if (backend != "rules" and url) else None
@@ -288,7 +302,7 @@ def _analyze_rules(item, full_text=None):
         acquirer, target, rationale = _extract_acquisition(text)
         return {
             "applies_to_aicure": True,
-            "aicure_category": "Acquisition / M&A",
+            "aicure_category": ACQUISITION_CATEGORY,
             "indication": None,
             "est_size": None,
             "geography": _extract_geo(text),
@@ -318,7 +332,8 @@ def _analyze_rules(item, full_text=None):
                       "registry_change", "study_startup", "site_opening") \
         and not any(c in text.lower() for c in late_cues)
 
-    fit_reason = (f"{category} indication" if applies else "outside cardiometabolic focus")
+    fit_reason = (f"{category} indication" if applies
+                  else "outside AiCure's CNS / cardiometabolic focus")
 
     fit_signals = []
     if any(k in text for k in ("oral", "tablet", "capsule", "pill", "self-inject",

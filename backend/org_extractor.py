@@ -286,12 +286,21 @@ def extract_from_trials():
             """,
             (slug, info["canonical_name"], json.dumps(aliases_list), org_type, therapeutic_focus, now),
         )
-        # Refresh therapeutic_focus, aliases AND org_type from current data so a
-        # re-pull re-classifies (org_type used to be frozen on first insert, which
-        # left BIOTECH unassigned). Analyst-editable fields are untouched.
+        # Always refresh therapeutic_focus + aliases from current data.
         conn.execute(
-            "UPDATE organizations SET therapeutic_focus = ?, aliases = ?, org_type = ? WHERE id = ?",
-            (therapeutic_focus, json.dumps(aliases_list), org_type, slug),
+            "UPDATE organizations SET therapeutic_focus = ?, aliases = ? WHERE id = ?",
+            (therapeutic_focus, json.dumps(aliases_list), slug),
+        )
+        # Re-derive org_type ONLY when an analyst hasn't pinned it. A manual
+        # org_type edit sets org_type_locked=1 (see api.patch_org), so a re-pull
+        # can still backfill the auto classification (e.g. the BIOTECH split) for
+        # untouched orgs without clobbering a human reclassification
+        # (CRO / DCT_VENDOR / DIGITAL_HEALTH / …), which used to be silently
+        # reverted on every ingest.
+        conn.execute(
+            "UPDATE organizations SET org_type = ? "
+            "WHERE id = ? AND IFNULL(org_type_locked, 0) = 0",
+            (org_type, slug),
         )
 
         for alias in info["aliases"]:

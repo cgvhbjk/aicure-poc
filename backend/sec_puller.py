@@ -15,11 +15,18 @@ unaffected) until explicitly switched on.
 import os
 import json
 import time
-from datetime import datetime
+import sqlite3
+from datetime import datetime, timezone
 
 import requests
 
 from db import get_connection
+
+
+def _utcnow_iso() -> str:
+    """Naive-UTC ISO timestamp (datetime.utcnow() is deprecated / removal-tracked),
+    matching the format the rest of the DB stores."""
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
 _EFTS_URL = "https://efts.sec.gov/LATEST/search-index"
 # SEC requires a descriptive UA with contact info; override via env in deploy.
@@ -57,10 +64,10 @@ def _build_url(hit):
     return f"https://efts.sec.gov/LATEST/search-index?q=&forms={src.get('form', '')}"
 
 
-def parse_hits(data, form, event_type):
+def parse_hits(data: dict, form: str, event_type: str) -> list:
     """Pure transform: EFTS JSON → list of news_items dicts. Kept side-effect-free
     so it can be unit-tested against a captured sample response."""
-    now = datetime.utcnow().isoformat()
+    now = _utcnow_iso()
     out = []
     hits = (((data or {}).get("hits") or {}).get("hits")) or []
     for h in hits:
@@ -70,9 +77,7 @@ def parse_hits(data, form, event_type):
         # display_names look like "Acme Therapeutics Inc  (CIK 0001234567)" — trim the CIK.
         company = company.split("  (")[0].split(" (CIK")[0].strip()
         file_date = src.get("file_date") or src.get("fileDate") or ""
-        url = _build_url(h)
-        if not url:
-            continue
+        url = _build_url(h)  # always non-empty (has a UI fallback)
         title = f"{company} — {form} filing" + (f" ({file_date})" if file_date else "")
         out.append({
             "source": f"SEC EDGAR — {form}",
@@ -93,15 +98,17 @@ def parse_hits(data, form, event_type):
     return out
 
 
-def _fetch(query, form, limit=100):
-    params = {"q": query, "forms": form, "hits": min(limit, 100)}
+def _fetch(query: str, form: str) -> dict:
+    # EFTS paginates with `from`/`size` (it returns ~10 hits/page); the previously
+    # passed `hits` param is not recognized, so we just take the first page here.
+    params = {"q": query, "forms": form}
     resp = requests.get(_EFTS_URL, params=params,
                         headers={"User-Agent": _USER_AGENT}, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
 
-def pull_sec():
+def pull_sec() -> None:
     """Entry point used by ingest.py. No-op (and prints why) unless
     AICURE_SEC_ENABLED=1, so it never affects the default pipeline or tests."""
     if os.environ.get("AICURE_SEC_ENABLED") != "1":
@@ -111,15 +118,16 @@ def pull_sec():
     conn = get_connection()
     inserted = 0
     for form, event_type, query in _SEARCHES:
+        # Catch ONLY the network/transport error here — a bug in the pure
+        # parse_hits transform should surface as itself, not be mislabeled a
+        # "fetch failed".
         try:
             data = _fetch(query, form)
-            rows = parse_hits(data, form, event_type)
-        except Exception as e:
+        except requests.RequestException as e:
             print(f"  [WARN] SEC EDGAR fetch failed for {form}: {e}")
             continue
+        rows = parse_hits(data, form, event_type)
         for item in rows:
-            if not item["url"]:
-                continue
             try:
                 # url is UNIQUE — a filing already seen (e.g. a prior quarter's
                 # 10-Q) is skipped, so each filing's FIRST appearance wins.
@@ -140,8 +148,8 @@ def pull_sec():
                 )
                 if conn.execute("SELECT changes()").fetchone()[0]:
                     inserted += 1
-            except Exception as e:
-                print(f"  [WARN] SEC insert failed: {e}")
+            except sqlite3.Error as e:
+                print(f"  [WARN] SEC insert failed for {item.get('url')}: {e}")
         conn.commit()
         time.sleep(0.3)  # polite to EDGAR
     conn.close()

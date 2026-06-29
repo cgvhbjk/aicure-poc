@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { getOrgTrials, getOrgContacts, addOrgContact, enrichOrgContacts, patchOrg } from '../api'
 import { safeHref } from '../utils/url'
 
@@ -130,8 +130,20 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
   const [enriching, setEnriching] = useState(false)
   const [enrichMsg, setEnrichMsg] = useState(null)
 
+  // Track mount so a slow enrichment that resolves after the panel closes
+  // doesn't setState on an unmounted component.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
   useEffect(() => {
     if (!org?.id) return
+    // Clear stale enrichment UI from a previously-viewed org (the rest of the
+    // panel's state is keyed off org?.id; keep this consistent).
+    setEnrichMsg(null)
+    setEnriching(false)
     setLoadingTrials(true)
     getOrgTrials(org.id).then((r) => setTrials(r.data)).catch(console.error).finally(() => setLoadingTrials(false))
     getOrgContacts(org.id).then((r) => setContacts(r.data)).catch(console.error)
@@ -151,6 +163,7 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
     setEnrichMsg(null)
     try {
       const res = await enrichOrgContacts(org.id)
+      if (!mountedRef.current) return
       if (Array.isArray(res.data?.contacts)) setContacts(res.data.contacts)
       const st = res.data?.status || {}
       if (st.ok) {
@@ -160,9 +173,20 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
         setEnrichMsg(st.error || 'Enrichment unavailable')
       }
     } catch (e) {
-      setEnrichMsg(e?.response?.data?.detail || 'Enrichment failed (admin key required)')
+      // Report the actual failure rather than always blaming auth. Log the raw
+      // error so a Seamless outage / network fault is debuggable.
+      console.error('enrichOrgContacts failed', e)
+      if (!mountedRef.current) return
+      const status = e?.response?.status
+      const detail = e?.response?.data?.detail
+      setEnrichMsg(
+        detail
+        || (status === 401 || status === 403 ? 'Not authorized to enrich'
+            : status ? `Enrichment failed (HTTP ${status})`
+            : 'Enrichment failed — network or server error')
+      )
     } finally {
-      setEnriching(false)
+      if (mountedRef.current) setEnriching(false)
     }
   }
 

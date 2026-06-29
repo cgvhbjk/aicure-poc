@@ -65,3 +65,23 @@ def test_no_key_noops(monkeypatch):
     monkeypatch.delenv("SEAMLESS_API_KEY", raising=False)
     r = seamless.enrich_org_contacts("org-nokey")
     assert r["ok"] is False and r["api_calls"] == 0
+
+
+def test_failed_lookup_cached_not_rebilled(monkeypatch):
+    """A failed (HTTP-error) lookup still bills a credit, so it's cached on a short
+    TTL — an immediate retry must NOT re-spend (the documented invariant)."""
+    _make_org("org-err", "Err Bio")
+    monkeypatch.setenv("SEAMLESS_API_KEY", "test-key")
+    calls = {"n": 0}
+
+    def boom(org_name):
+        calls["n"] += 1
+        raise RuntimeError("HTTP 500")
+    monkeypatch.setattr(seamless, "_call_seamless", boom)
+
+    r1 = seamless.enrich_org_contacts("org-err", force_refresh=True)
+    assert r1["ok"] is False and r1["api_calls"] == 1 and calls["n"] == 1
+
+    r2 = seamless.enrich_org_contacts("org-err")     # immediate retry → error marker
+    assert r2["source"] == "cache" and r2["api_calls"] == 0
+    assert calls["n"] == 1                            # NOT re-billed

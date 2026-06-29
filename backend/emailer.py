@@ -39,6 +39,7 @@ from scoring import (
     _days_from_now,
 )
 from target_accounts import is_known_customer
+from news_nlp import ACQUISITION_CATEGORY
 
 PREVIEW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "email_previews")
 
@@ -59,7 +60,7 @@ EVENT_TYPE_DISPLAY = [
     ("site_opening",           "Site Activation"),
     ("recruitment_initiation", "Already Recruiting (likely too late)"),
     ("trial_results",          "Trial Results (too late)"),
-    ("acquisition",            "Acquisition / M&A"),
+    ("acquisition",            ACQUISITION_CATEGORY),
 ]
 
 # Event types worth emailing as opportunities — strictly pre-enrollment.
@@ -491,9 +492,14 @@ def build_news_digest(hours=24, max_items=10, fetch=False, pick_titles=None):
         item = dict(r)
         ft = news_nlp.fetch_article_text(r["url"]) if fetch else None
         a = news_nlp.analyze(item, full_text=ft)
-        # NLP gate: AiCure-relevant AND not yet started AND a CONCRETE touchpoint
-        # (no-touchpoint items are dropped, not shown — §4a).
-        if not (a["applies_to_aicure"] and a["not_yet_started"] and a.get("fit_signals")):
+        # NLP gate: AiCure-relevant AND not yet started AND a touchpoint. A
+        # concrete fit_signal (oral/inject/weight cue) qualifies; so does a core
+        # CNS/Neuro indication on its own — those are AiCure's primary book and
+        # RSS snippets often omit an explicit oral token, so requiring fit_signals
+        # alone was silently dropping relevant CNS leads (the retarget goal).
+        touchpoint = bool(a.get("fit_signals")) or \
+            a.get("aicure_category") in ("CNS / Psychiatry", "Neurology")
+        if not (a["applies_to_aicure"] and a["not_yet_started"] and touchpoint):
             continue
         candidates.append((r, a))
         if len(candidates) >= max_items:
@@ -541,7 +547,7 @@ def build_news_digest(hours=24, max_items=10, fetch=False, pick_titles=None):
         acq_cards.append(_lead_card(
             r["title"], r["url"], score=None, score_why="",
             abstract=_clean_excerpt(r["body_snippet"], 220),
-            fields=fields, tag="Acquisition / M&A",
+            fields=fields, tag=ACQUISITION_CATEGORY,
             blurb="A buyout reshapes a pipeline — assess whether the combined entity "
                   "now runs adherence-relevant trials AiCure can serve.",
         ))

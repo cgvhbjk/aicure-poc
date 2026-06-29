@@ -86,12 +86,14 @@ export const getOrg = (orgId) => api.get(`/orgs/${orgId}`)
 export const getOrgTrials = (orgId) => api.get(`/orgs/${orgId}/trials`)
 export const getOrgContacts = (orgId) => api.get(`/orgs/${orgId}/contacts`)
 export const addOrgContact = (orgId, body) => api.post(`/orgs/${orgId}/contacts`, body)
-// Seamless.AI enrichment (admin-guarded). Sends the admin key from VITE_ADMIN_KEY
-// when configured; served from the credit cache when possible (api_calls=0).
+// Seamless.AI enrichment (can spend credits). Authorized server-side by the
+// app-password session: the browser's cached Basic-auth header rides along
+// automatically same-origin, so NO admin key is embedded in this public bundle
+// (VITE_* vars ship to every browser). Served from the credit cache when
+// possible (api_calls=0).
 export const enrichOrgContacts = (orgId, force = false) =>
   api.post(`/orgs/${orgId}/enrich-contacts`, null, {
     params: { force_refresh: force },
-    headers: { 'X-Admin-Key': import.meta.env.VITE_ADMIN_KEY ?? '' },
   })
 export const patchOrg = (orgId, body) => api.patch(`/orgs/${orgId}`, body)
 

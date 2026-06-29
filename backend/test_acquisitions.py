@@ -29,3 +29,29 @@ def test_acquisition_applies_without_trial_touchpoint():
     assert a["not_yet_started"] is True
     assert a.get("acquirer") and a.get("target")
     assert "NovaBio" in (a.get("target") or "")
+
+
+def test_acquisition_skips_llm_backend(monkeypatch):
+    """Even with an LLM backend configured (the deploy default), acquisitions take
+    the deterministic rules path — the LLM schema doesn't model acquirer/target,
+    so routing M&A through it would render the digest's M&A cards blank."""
+    monkeypatch.setenv("AICURE_NLP_BACKEND", "api")
+    called = {"llm": False}
+
+    def fake_llm(item, full_text=None):
+        called["llm"] = True
+        return {"aicure_category": "Off-focus", "method": "llm",
+                "applies_to_aicure": False}
+    monkeypatch.setattr(news_nlp, "_analyze_llm", fake_llm)
+
+    item = {
+        "title": "Acme Pharma to acquire NovaBio",
+        "body_snippet": "Acme Pharma agreed to acquire NovaBio to bolster its "
+                        "depression pipeline.",
+        "event_type": "acquisition",
+        "url": "http://example.com/deal2",
+    }
+    a = news_nlp.analyze(item)                 # no use_llm → would hit the LLM without the hoist
+    assert called["llm"] is False              # acquisition never reaches the LLM
+    assert a["aicure_category"] == "Acquisition / M&A"
+    assert a.get("acquirer") and a.get("target")
