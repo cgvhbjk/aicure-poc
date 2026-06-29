@@ -4,7 +4,7 @@ Seeded from the historical won-deal book. A *new* trial or grant from a sponsor
 AiCure has already sold to is the single highest-probability lead (the book is
 dominated by repeat/expansion business), so the scorer boosts these. Matching is
 substring-based on distinctive, lowercased name fragments after normalizing the
-sponsor through org_extractor.resolve_alias — so "Neumora Therapeutics, Inc."
+sponsor through org_aliases.resolve_alias — so "Neumora Therapeutics, Inc."
 and "NEUMORA" both match "neumora".
 
 CROs (Syneos / ICON / PPD / IQVIA / Premier / …) run many sponsors' trials; a
@@ -14,7 +14,9 @@ analyst-editable: add a fragment to grow coverage.
 
 import re
 
-from org_extractor import resolve_alias
+# Import from the dependency-free org_aliases (NOT org_extractor) so this module —
+# and scoring, which imports it — stays free of any db dependency.
+from org_aliases import resolve_alias
 
 # Distinctive lowercase name fragments of won accounts. Matched on WORD
 # BOUNDARIES (not bare substrings) so a fragment can't hide inside an unrelated
@@ -40,7 +42,7 @@ KNOWN_CUSTOMER_FRAGMENTS = [
     "department of defense", "neurovance",
 ]
 
-# Distinctive CRO name fragments (mirror org_extractor.KNOWN_ALIASES CRO entries).
+# Distinctive CRO name fragments (a curated subset of org_aliases.KNOWN_ALIASES CRO entries).
 CRO_FRAGMENTS = [
     "iqvia", "icon", "parexel", "syneos", "ppd", "medpace", "premier research",
     "worldwide clinical", "fortrea", "labcorp", "covance", "lotus clinical",

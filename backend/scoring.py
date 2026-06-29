@@ -447,3 +447,15 @@ def score_trial(trial):
 def score_grant(grant):
     """0-100 AiCure opportunity score for a grant (number only)."""
     return _illustrative_grant_score(grant)[0]
+
+
+# Stable public surface for the genuinely-shared helpers the email digest reuses
+# (emailer.py imports THESE, not the underscore-prefixed internals), so the
+# scorer's internals can be refactored without breaking the digest at import time.
+illustrative_trial_score = _illustrative_trial_score   # (score, why) for a trial
+illustrative_grant_score = _illustrative_grant_score   # (score, why) for a grant
+trial_aicure_fit = _trial_aicure_fit                   # (pts, labels, has_signal)
+grant_aicure_fit = _grant_aicure_fit                   # (pts, labels, has_signal)
+fit_blurb = _fit_blurb                                 # human "why this fits AiCure"
+trial_phase1_graduate = _trial_phase1_graduate         # (is_graduate, why)
+days_from_now = _days_from_now                         # signed days until a date

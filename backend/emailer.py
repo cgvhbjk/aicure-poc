@@ -33,10 +33,16 @@ from datetime import datetime, timedelta
 from dateutil.parser import parse as dateparse
 
 from db import get_connection
+# Import the PUBLIC scoring surface (not the underscore-prefixed internals), bound
+# to local names so the rest of this module reads unchanged.
 from scoring import (
-    _illustrative_trial_score, _illustrative_grant_score,
-    _trial_aicure_fit, _grant_aicure_fit, _fit_blurb, _trial_phase1_graduate,
-    _days_from_now,
+    illustrative_trial_score as _illustrative_trial_score,
+    illustrative_grant_score as _illustrative_grant_score,
+    trial_aicure_fit as _trial_aicure_fit,
+    grant_aicure_fit as _grant_aicure_fit,
+    fit_blurb as _fit_blurb,
+    trial_phase1_graduate as _trial_phase1_graduate,
+    days_from_now as _days_from_now,
 )
 from target_accounts import is_known_customer
 from news_nlp import ACQUISITION_CATEGORY

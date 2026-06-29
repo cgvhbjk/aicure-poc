@@ -504,63 +504,6 @@ def _trials_where(q, status, phase, therapeutic_area, country, has_news,
     return where_sql, params
 
 
-@app.get("/trials")
-def get_trials(
-    q: Optional[str] = None,
-    status: Optional[List[str]] = Query(default=None),
-    phase: Optional[List[str]] = Query(default=None),
-    therapeutic_area: Optional[List[str]] = Query(default=None),
-    country: Optional[List[str]] = Query(default=None),
-    has_news: Optional[bool] = None,
-    has_euct_id: Optional[bool] = None,
-    registry: Optional[List[str]] = Query(default=None),
-    sponsor: Optional[str] = None,
-    sponsor_not: Optional[str] = None,
-    min_enrollment: Optional[int] = None,
-    max_enrollment: Optional[int] = None,
-    start_date_from: Optional[str] = None,
-    start_date_to: Optional[str] = None,
-    completion_date_from: Optional[str] = None,
-    completion_date_to: Optional[str] = None,
-    sort: Optional[str] = "last_updated",
-    sort_dir: str = Query("desc", alias="dir"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(100, ge=1, le=500),
-):
-    conn = get_connection()
-
-    where_sql, params = _trials_where(
-        q, status, phase, therapeutic_area, country, has_news, has_euct_id,
-        registry, sponsor, sponsor_not, min_enrollment, max_enrollment,
-        start_date_from, start_date_to, completion_date_from, completion_date_to)
-
-    total = conn.execute(f"SELECT COUNT(*) FROM trials {where_sql}", params).fetchone()[0]
-    offset = (page - 1) * page_size
-    order_by = _order_by_clause(sort, sort_dir, TRIAL_SORTABLE_COLUMNS,
-                                "last_updated", "id")
-    rows = conn.execute(
-        f"SELECT {_TRIAL_GRID_COLS} FROM trials {where_sql} "
-        f"{order_by} LIMIT ? OFFSET ?",
-        params + [page_size, offset],
-    ).fetchall()
-
-    results = [row_to_dict(r) for r in rows]
-    # Prefer the precomputed score; fall back for any un-backfilled row. The
-    # scorer reads brief_summary, which the grid SELECT deliberately omits, so
-    # re-fetch it for just the unscored rows (rare: backfill runs after every
-    # ingest and daily at 07:00 UTC).
-    unscored = [t["id"] for t in results if t.get("aicure_fit") is None]
-    if unscored:
-        placeholders = ",".join("?" * len(unscored))
-        summaries = dict(conn.execute(
-            f"SELECT id, brief_summary FROM trials WHERE id IN ({placeholders})",
-            unscored,
-        ).fetchall())
-        for t in results:
-            if t.get("aicure_fit") is None:
-                t["aicure_fit"] = score_trial({**t, "brief_summary": summaries.get(t["id"])})
-    conn.close()
-    return {"total": total, "page": page, "results": results}
 
 
 # (field, CSV header) — mirrors the Trials grid defaults plus contact fields.
@@ -578,59 +521,8 @@ _TRIAL_EXPORT_COLUMNS = [
 
 # NOTE: must be registered before GET /trials/{trial_id}, or "export" would be
 # captured as a trial id.
-@app.get("/trials/export")
-def export_trials(
-    q: Optional[str] = None,
-    status: Optional[List[str]] = Query(default=None),
-    phase: Optional[List[str]] = Query(default=None),
-    therapeutic_area: Optional[List[str]] = Query(default=None),
-    country: Optional[List[str]] = Query(default=None),
-    has_news: Optional[bool] = None,
-    has_euct_id: Optional[bool] = None,
-    registry: Optional[List[str]] = Query(default=None),
-    sponsor: Optional[str] = None,
-    sponsor_not: Optional[str] = None,
-    min_enrollment: Optional[int] = None,
-    max_enrollment: Optional[int] = None,
-    start_date_from: Optional[str] = None,
-    start_date_to: Optional[str] = None,
-    completion_date_from: Optional[str] = None,
-    completion_date_to: Optional[str] = None,
-    sort: Optional[str] = "last_updated",
-    sort_dir: str = Query("desc", alias="dir"),
-):
-    """Stream the FULL filtered trial set as CSV (honors the grid's filters +
-    sort). Replaces the client-side export, which only covered loaded rows
-    once the grid moved to the infinite row model."""
-    where_sql, params = _trials_where(
-        q, status, phase, therapeutic_area, country, has_news, has_euct_id,
-        registry, sponsor, sponsor_not, min_enrollment, max_enrollment,
-        start_date_from, start_date_to, completion_date_from, completion_date_to)
-    order_by = _order_by_clause(sort, sort_dir, TRIAL_SORTABLE_COLUMNS,
-                                "last_updated", "id")
-
-    def postprocess(t):
-        if t.get("aicure_fit") is None:
-            t["aicure_fit"] = score_trial(t)
-
-    return _csv_stream(
-        "trials", _TRIAL_EXPORT_COLUMNS,
-        f"SELECT * FROM trials {where_sql} {order_by}", params, postprocess)
 
 
-@app.get("/trials/{trial_id}")
-def get_trial(trial_id: str):
-    """Full trial record, including the fat text fields (summary, eligibility
-    criteria, endpoints) the grid SELECT omits. The detail panel fetches this."""
-    conn = get_connection()
-    row = conn.execute("SELECT * FROM trials WHERE id = ?", (trial_id,)).fetchone()
-    conn.close()
-    if not row:
-        raise HTTPException(status_code=404, detail="Trial not found")
-    t = row_to_dict(row)
-    if t.get("aicure_fit") is None:
-        t["aicure_fit"] = score_trial(t)
-    return t
 
 
 def _news_where(q, source, linked_only, is_trial_announcement, is_trial_results,
@@ -719,49 +611,6 @@ _NEWS_SELECT = """
 """
 
 
-@app.get("/news")
-def get_news(
-    q: Optional[str] = None,
-    source: Optional[List[str]] = Query(default=None),
-    linked_only: Optional[bool] = None,
-    is_trial_announcement: Optional[bool] = None,
-    is_trial_results: Optional[bool] = None,
-    published_at_from: Optional[str] = None,
-    published_at_to: Optional[str] = None,
-    drug_mentioned: Optional[str] = None,
-    drug_mentioned_not: Optional[str] = None,
-    phase_mentioned: Optional[str] = None,
-    phase_mentioned_not: Optional[str] = None,
-    sponsor_mentioned: Optional[str] = None,
-    sponsor_mentioned_not: Optional[str] = None,
-    sort: Optional[str] = "published_at",
-    sort_dir: str = Query("desc", alias="dir"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(100, ge=1, le=500),
-):
-    # Build the WHERE first: _iso_day() can raise 422 on a bad date param, and
-    # doing it before opening the connection avoids leaking one on that path.
-    where_sql, params = _news_where(
-        q, source, linked_only, is_trial_announcement, is_trial_results,
-        published_at_from, published_at_to, drug_mentioned, drug_mentioned_not,
-        phase_mentioned, phase_mentioned_not, sponsor_mentioned,
-        sponsor_mentioned_not)
-    conn = get_connection()
-
-    total = conn.execute(
-        f"SELECT COUNT(*) FROM news_items ni {where_sql}", params
-    ).fetchone()[0]
-
-    offset = (page - 1) * page_size
-    order_by = _order_by_clause(sort, sort_dir, NEWS_SORTABLE_COLUMNS,
-                                "published_at", "ni.id DESC", prefix="ni.")
-    rows = conn.execute(
-        f"{_NEWS_SELECT} {where_sql} {order_by} LIMIT ? OFFSET ?",
-        params + [page_size, offset],
-    ).fetchall()
-
-    conn.close()
-    return {"total": total, "results": [row_to_dict(r) for r in rows]}
 
 
 # (field, CSV header) — mirrors the News grid.
@@ -776,69 +625,10 @@ _NEWS_EXPORT_COLUMNS = [
 ]
 
 
-@app.get("/news/export")
-def export_news(
-    q: Optional[str] = None,
-    source: Optional[List[str]] = Query(default=None),
-    linked_only: Optional[bool] = None,
-    is_trial_announcement: Optional[bool] = None,
-    is_trial_results: Optional[bool] = None,
-    published_at_from: Optional[str] = None,
-    published_at_to: Optional[str] = None,
-    drug_mentioned: Optional[str] = None,
-    drug_mentioned_not: Optional[str] = None,
-    phase_mentioned: Optional[str] = None,
-    phase_mentioned_not: Optional[str] = None,
-    sponsor_mentioned: Optional[str] = None,
-    sponsor_mentioned_not: Optional[str] = None,
-    sort: Optional[str] = "published_at",
-    sort_dir: str = Query("desc", alias="dir"),
-):
-    """Stream the FULL filtered news set as CSV (honors the grid's filters +
-    sort); see export_trials for why this is server-side."""
-    where_sql, params = _news_where(
-        q, source, linked_only, is_trial_announcement, is_trial_results,
-        published_at_from, published_at_to, drug_mentioned, drug_mentioned_not,
-        phase_mentioned, phase_mentioned_not, sponsor_mentioned,
-        sponsor_mentioned_not)
-    order_by = _order_by_clause(sort, sort_dir, NEWS_SORTABLE_COLUMNS,
-                                "published_at", "ni.id DESC", prefix="ni.")
-    return _csv_stream(
-        "news", _NEWS_EXPORT_COLUMNS,
-        f"{_NEWS_SELECT} {where_sql} {order_by}", params)
 
 
-@app.get("/trials/{trial_id}/registries")
-def get_trial_registries(trial_id: str):
-    conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT registry, registry_trial_id, ingested_at
-        FROM registry_source_records
-        WHERE trial_id = ?
-        ORDER BY registry
-        """,
-        (trial_id,),
-    ).fetchall()
-    conn.close()
-    return [row_to_dict(r) for r in rows]
 
 
-@app.get("/trials/{nct_id}/news")
-def get_trial_news(nct_id: str):
-    conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT ni.*, tnl.match_method
-        FROM news_items ni
-        JOIN trial_news_links tnl ON ni.id = tnl.news_id
-        WHERE tnl.trial_id = ?
-        ORDER BY ni.published_at DESC
-        """,
-        (nct_id,),
-    ).fetchall()
-    conn.close()
-    return [row_to_dict(r) for r in rows]
 
 
 class OrgUpdate(BaseModel):
@@ -868,265 +658,20 @@ _PATCHABLE_ORG_FIELDS = {
 }
 
 
-@app.get("/orgs")
-def get_orgs(
-    q: Optional[str] = None,
-    org_type: Optional[List[str]] = Query(default=None),
-    therapeutic_focus: Optional[List[str]] = Query(default=None),
-    white_label: Optional[str] = None,
-    has_trials: Optional[bool] = None,
-    sort: Optional[str] = "trial_count",
-    sort_dir: str = Query("desc", alias="dir"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(100, ge=1, le=500),
-):
-    conn = get_connection()
-
-    where_clauses = []
-    params = []
-
-    if q:
-        where_clauses.append(
-            "(LOWER(o.canonical_name) LIKE ? OR LOWER(o.aliases) LIKE ? OR LOWER(o.offerings) LIKE ?)"
-        )
-        q_like = f"%{q.lower()}%"
-        params.extend([q_like, q_like, q_like])
-
-    if org_type:
-        placeholders = ",".join("?" * len(org_type))
-        where_clauses.append(f"o.org_type IN ({placeholders})")
-        params.extend(org_type)
-
-    if therapeutic_focus:
-        tf_clauses = " OR ".join(["o.therapeutic_focus LIKE ?"] * len(therapeutic_focus))
-        where_clauses.append(f"({tf_clauses})")
-        params.extend([f"%{tf}%" for tf in therapeutic_focus])
-
-    if white_label:
-        where_clauses.append("o.white_label_signal = ?")
-        params.append(white_label)
-
-    if has_trials:
-        where_clauses.append("o.trial_count > 0")
-
-    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
-    total = conn.execute(f"SELECT COUNT(*) FROM organizations o {where_sql}", params).fetchone()[0]
-    offset = (page - 1) * page_size
-    order_by = _order_by_clause(sort, sort_dir, ORG_SORTABLE_COLUMNS,
-                                "trial_count", "o.canonical_name", prefix="o.")
-    rows = conn.execute(
-        f"SELECT o.* FROM organizations o {where_sql} {order_by} LIMIT ? OFFSET ?",
-        params + [page_size, offset],
-    ).fetchall()
-
-    conn.close()
-    return {"total": total, "page": page, "results": [row_to_dict(r) for r in rows]}
 
 
-@app.get("/orgs/{org_id}")
-def get_org(org_id: str):
-    conn = get_connection()
-    row = conn.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchone()
-    conn.close()
-    if not row:
-        raise HTTPException(status_code=404, detail="Organization not found")
-    return row_to_dict(row)
 
 
-@app.get("/orgs/{org_id}/trials")
-def get_org_trials(org_id: str):
-    conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT t.*, tol.role
-        FROM trials t
-        JOIN trial_org_links tol ON t.id = tol.trial_id
-        WHERE tol.org_id = ?
-        ORDER BY t.last_updated DESC
-        """,
-        (org_id,),
-    ).fetchall()
-    conn.close()
-    return [row_to_dict(r) for r in rows]
 
 
-@app.get("/orgs/{org_id}/contacts")
-def get_org_contacts(org_id: str):
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM org_contacts WHERE org_id = ? ORDER BY is_decision_maker DESC, full_name",
-        (org_id,),
-    ).fetchall()
-    conn.close()
-    return [row_to_dict(r) for r in rows]
 
 
-@app.post("/orgs/{org_id}/contacts")
-def add_org_contact(org_id: str, body: ContactCreate):
-    conn = get_connection()
-    org = conn.execute("SELECT id FROM organizations WHERE id = ?", (org_id,)).fetchone()
-    if not org:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Organization not found")
-
-    from datetime import datetime
-    cur = conn.execute(
-        """
-        INSERT INTO org_contacts
-            (org_id, full_name, title, department, email, linkedin_url, source_url, is_decision_maker, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            org_id, body.full_name, body.title, body.department, body.email,
-            body.linkedin_url, body.source_url, body.is_decision_maker or 0,
-            body.notes, datetime.utcnow().isoformat(),
-        ),
-    )
-    new_id = cur.lastrowid
-    conn.commit()
-    row = conn.execute("SELECT * FROM org_contacts WHERE id = ?", (new_id,)).fetchone()
-    conn.close()
-    return row_to_dict(row)
 
 
-@app.post("/orgs/{org_id}/enrich-contacts")
-def enrich_org_contacts_route(org_id: str, request: Request,
-                              force_refresh: bool = False,
-                              x_admin_key: str = Header(default="")):
-    """Enrich an org's contacts with CMO / clinical decision-makers via Seamless.AI
-    (§7). Authorized by the app-password session or the service admin key (it can
-    spend Seamless credits). Served from the credit cache when possible; returns
-    api_calls=0 when no credits were spent. No-ops cleanly when SEAMLESS_API_KEY
-    is unset."""
-    _require_enrich_auth(request, x_admin_key)
-    from seamless import enrich_org_contacts
-    result = enrich_org_contacts(org_id, force_refresh=force_refresh)
-    if not result.get("ok") and result.get("error") == "organization not found":
-        raise HTTPException(status_code=404, detail="Organization not found")
-    # Return the refreshed contact list alongside the enrichment status.
-    conn = get_connection()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM org_contacts WHERE org_id = ? ORDER BY is_decision_maker DESC, full_name",
-            (org_id,),
-        ).fetchall()
-    finally:
-        conn.close()
-    return {"status": result, "contacts": [row_to_dict(r) for r in rows]}
 
 
-@app.patch("/orgs/{org_id}")
-def patch_org(org_id: str, body: OrgUpdate):
-    conn = get_connection()
-    org = conn.execute("SELECT id FROM organizations WHERE id = ?", (org_id,)).fetchone()
-    if not org:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Organization not found")
-
-    updates = {k: v for k, v in body.model_dump().items() if v is not None and k in _PATCHABLE_ORG_FIELDS}
-    if not updates:
-        row = conn.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchone()
-        conn.close()
-        return row_to_dict(row)
-
-    set_clauses = ", ".join(f"{k} = ?" for k in updates)
-    # A manual org_type edit pins the classification (org_type_locked=1) so the
-    # next ingest's auto-reclassification won't revert it.
-    if "org_type" in updates:
-        set_clauses += ", org_type_locked = 1"
-    conn.execute(
-        f"UPDATE organizations SET {set_clauses} WHERE id = ?",
-        list(updates.values()) + [org_id],
-    )
-    conn.commit()
-    row = conn.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchone()
-    conn.close()
-    return row_to_dict(row)
 
 
-@app.get("/relationships")
-def get_relationships(
-    org_id: Optional[str] = None,
-    therapeutic_area: Optional[List[str]] = Query(default=None),
-    status: Optional[List[str]] = Query(default=None),
-    phase: Optional[List[str]] = Query(default=None),
-):
-    conn = get_connection()
-
-    # Determine which orgs to show
-    if org_id:
-        orgs = conn.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchall()
-    else:
-        orgs = conn.execute(
-            "SELECT * FROM organizations ORDER BY trial_count DESC LIMIT 20"
-        ).fetchall()
-
-    org_ids = [o["id"] for o in orgs]
-    if not org_ids:
-        conn.close()
-        return {"nodes": [], "edges": [], "total_nodes": 0}
-
-    # Get trial links for these orgs
-    placeholders = ",".join("?" * len(org_ids))
-    links = conn.execute(
-        f"SELECT trial_id, org_id, role FROM trial_org_links WHERE org_id IN ({placeholders})",
-        org_ids,
-    ).fetchall()
-
-    trial_ids = list({lnk["trial_id"] for lnk in links})
-    if not trial_ids:
-        conn.close()
-        org_nodes = [
-            {"id": o["id"], "label": o["canonical_name"], "type": o["org_type"] or "OTHER", "trial_count": o["trial_count"] or 0}
-            for o in orgs
-        ]
-        return {"nodes": org_nodes, "edges": [], "total_nodes": len(org_nodes)}
-
-    # Apply trial filters — default to RECRUITING + NOT_YET_RECRUITING
-    status_filter = status if status else ["RECRUITING", "NOT_YET_RECRUITING"]
-    t_ph = ",".join("?" * len(trial_ids))
-    s_ph = ",".join("?" * len(status_filter))
-    trial_where = [f"id IN ({t_ph})", f"status IN ({s_ph})"]
-    trial_params = trial_ids + status_filter
-
-    if therapeutic_area:
-        ta_ph = ",".join("?" * len(therapeutic_area))
-        trial_where.append(f"therapeutic_area IN ({ta_ph})")
-        trial_params.extend(therapeutic_area)
-
-    if phase:
-        ph_ph = ",".join("?" * len(phase))
-        trial_where.append(f"phase IN ({ph_ph})")
-        trial_params.extend(phase)
-
-    trials = conn.execute(
-        f"SELECT id, title_brief, status, phase, therapeutic_area FROM trials WHERE {' AND '.join(trial_where)}",
-        trial_params,
-    ).fetchall()
-    conn.close()
-
-    valid_trial_ids = {t["id"] for t in trials}
-
-    org_nodes = [
-        {"id": o["id"], "label": o["canonical_name"], "type": o["org_type"] or "OTHER", "trial_count": o["trial_count"] or 0}
-        for o in orgs
-    ]
-    trial_nodes = [
-        {"id": t["id"], "label": t["title_brief"] or t["id"], "type": "TRIAL", "status": t["status"], "phase": t["phase"]}
-        for t in trials
-    ]
-    edges = [
-        {"source": lnk["org_id"], "target": lnk["trial_id"], "role": lnk["role"]}
-        for lnk in links
-        if lnk["trial_id"] in valid_trial_ids
-    ]
-
-    all_nodes = org_nodes + trial_nodes
-    return {
-        "nodes": all_nodes,
-        "edges": edges,
-        "total_nodes": len(all_nodes),
-    }
 
 
 class MergeConfirm(BaseModel):
@@ -1141,138 +686,8 @@ class MergeReview(BaseModel):
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
-@app.post("/upload")
-async def upload_file(
-    file: UploadFile = File(...),
-    entity_type: str = Form(...),
-    analyst_name: str = Form(default=""),
-    notes: str = Form(default=""),
-):
-    content = await file.read()
-    if len(content) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
-
-    valid_types = ("trials", "organizations", "contacts")
-    if entity_type not in valid_types:
-        raise HTTPException(status_code=400, detail=f"entity_type must be one of {list(valid_types)}")
-
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    safe_name = re.sub(r"[^\w.\-]", "_", file.filename or "upload")
-    save_path = os.path.join(_UPLOADS_DIR, f"{ts}_{safe_name}")
-    with open(save_path, "wb") as fh:
-        fh.write(content)
-
-    from upload_processor import process_upload
-    result = process_upload(content, file.filename or "", entity_type)
-
-    conn = get_connection()
-    cur = conn.execute(
-        """INSERT INTO uploads
-           (filename, entity_type, row_count, matched_count, new_count, skipped_count,
-            uploaded_at, uploaded_by, notes, file_path)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (file.filename, entity_type,
-         result["row_count"], result["matched"], result["inserted"], result["skipped"],
-         datetime.utcnow().isoformat(), analyst_name, notes, save_path),
-    )
-    upload_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-
-    errors = result.get("errors", [])
-    # Partial success is legitimate (200), but a file where EVERY row failed must
-    # not look like success to a caller that only checks the status code — flag it
-    # explicitly. errors is truncated to the first 50 (error_count has the total).
-    all_failed = (
-        result["row_count"] > 0 and result["inserted"] == 0 and result["matched"] == 0
-    )
-    return {
-        "status": "all_failed" if all_failed else "ok",
-        "upload_id": upload_id,
-        "filename": file.filename,
-        "row_count": result["row_count"],
-        "matched": result["matched"],
-        "inserted": result["inserted"],
-        "skipped": result["skipped"],
-        "errors": errors[:50],
-        "errors_truncated": len(errors) > 50,
-        "error_count": len(errors),
-        "merge_candidates": result.get("merge_candidates", 0),
-        "preview": result.get("preview", []),
-    }
 
 
-@app.get("/merges")
-def get_merges(
-    entity_type: Optional[str] = None,
-    status: str = "PENDING",
-    min_confidence: float = 0.0,
-    max_confidence: float = 1.0,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-):
-    conn = get_connection()
-
-    where = ["mc.confidence >= ?", "mc.confidence <= ?"]
-    params: list = [min_confidence, max_confidence]
-
-    if status == "PENDING":
-        where.append("(mc.status = 'PENDING' OR (mc.status = 'SNOOZED' AND mc.snooze_until < ?))")
-        params.append(datetime.utcnow().isoformat())
-    else:
-        where.append("mc.status = ?")
-        params.append(status)
-
-    if entity_type:
-        where.append("mc.entity_type = ?")
-        params.append(entity_type)
-
-    where_sql = "WHERE " + " AND ".join(where)
-    total = conn.execute(f"SELECT COUNT(*) FROM merge_candidates mc {where_sql}", params).fetchone()[0]
-    offset = (page - 1) * page_size
-    rows = conn.execute(
-        f"""SELECT mc.id, mc.entity_type, mc.record_a_id, mc.record_b_id, mc.confidence,
-                   mc.match_fields, mc.match_scores, mc.status, mc.reviewed_by, mc.reviewed_at,
-                   mc.merged_into, mc.snooze_until, mc.created_at,
-                   (mc.loser_snapshot IS NOT NULL) AS loser_snapshot
-            FROM merge_candidates mc {where_sql}
-            ORDER BY mc.confidence DESC, mc.created_at DESC LIMIT ? OFFSET ?""",
-        params + [page_size, offset],
-    ).fetchall()
-
-    candidates = [row_to_dict(r) for r in rows]
-    for c in candidates:
-        c["loser_snapshot"] = bool(c["loser_snapshot"])
-
-    # Batch-fetch entity records
-    trial_ids, org_ids = set(), set()
-    for c in candidates:
-        if c["entity_type"] == "trials":
-            trial_ids.update([c["record_a_id"], c["record_b_id"]])
-        else:
-            org_ids.update([c["record_a_id"], c["record_b_id"]])
-
-    trials_map, orgs_map = {}, {}
-    if trial_ids:
-        ph = ",".join("?" * len(trial_ids))
-        for r in conn.execute(f"SELECT * FROM trials WHERE id IN ({ph})", list(trial_ids)).fetchall():
-            trials_map[r["id"]] = row_to_dict(r)
-    if org_ids:
-        ph = ",".join("?" * len(org_ids))
-        for r in conn.execute(f"SELECT * FROM organizations WHERE id IN ({ph})", list(org_ids)).fetchall():
-            orgs_map[r["id"]] = row_to_dict(r)
-
-    conn.close()
-
-    for c in candidates:
-        if c["entity_type"] == "trials":
-            c["record_a"] = trials_map.get(c["record_a_id"])
-            c["record_b"] = trials_map.get(c["record_b_id"])
-        else:
-            c["record_a"] = orgs_map.get(c["record_a_id"])
-            c["record_b"] = orgs_map.get(c["record_b_id"])
-
-    return {"total": total, "page": page, "results": candidates}
 
 
 _TRIAL_FK_TABLES = [
@@ -1312,472 +727,22 @@ def _snapshot_pre_merge(conn, entity_type, survivor_id, loser_id):
     })
 
 
-@app.post("/merges/{merge_id}/confirm")
-def confirm_merge(merge_id: int, body: MergeConfirm):
-    conn = get_connection()
-    try:
-        mc = conn.execute("SELECT * FROM merge_candidates WHERE id = ?", (merge_id,)).fetchone()
-        if not mc:
-            raise HTTPException(status_code=404, detail="Merge candidate not found")
-
-        survivor_id = body.surviving_id or mc["record_a_id"]
-        loser_id = mc["record_b_id"] if survivor_id == mc["record_a_id"] else mc["record_a_id"]
-
-        snapshot_json = _snapshot_pre_merge(conn, mc["entity_type"], survivor_id, loser_id)
-
-        if mc["entity_type"] == "trials":
-            survivor = conn.execute("SELECT * FROM trials WHERE id = ?", (survivor_id,)).fetchone()
-            loser = conn.execute("SELECT * FROM trials WHERE id = ?", (loser_id,)).fetchone()
-            if not survivor:
-                raise HTTPException(status_code=400, detail=f"Survivor trial {survivor_id} not found")
-            if loser:
-                # Transfer registry info
-                import json as _json
-                s_sources = _json.loads(survivor["registry_sources"] or "[]")
-                s_ids = _json.loads(survivor["all_registry_ids"] or "[]")
-                b_sources = _json.loads(loser["registry_sources"] or "[]")
-                b_ids = _json.loads(loser["all_registry_ids"] or "[]")
-                for src in b_sources:
-                    if src not in s_sources:
-                        s_sources.append(src)
-                for rid in b_ids + [loser_id]:
-                    if rid not in s_ids:
-                        s_ids.append(rid)
-
-                from merge_detector import _id_col_for
-                id_col, reg_val = _id_col_for(loser_id)
-                extra_sql = f", {id_col} = ?" if id_col else ""
-                extra_params = [reg_val] if id_col else []
-                conn.execute(
-                    f"UPDATE trials SET registry_sources = ?, all_registry_ids = ?{extra_sql} WHERE id = ?",
-                    [_json.dumps(s_sources), _json.dumps(s_ids)] + extra_params + [survivor_id],
-                )
-
-                # Reassign FK references
-                conn.execute("UPDATE registry_source_records SET trial_id = ? WHERE trial_id = ?", (survivor_id, loser_id))
-                conn.execute("INSERT OR IGNORE INTO trial_org_links (trial_id, org_id, role) SELECT ?, org_id, role FROM trial_org_links WHERE trial_id = ?", (survivor_id, loser_id))
-                conn.execute("DELETE FROM trial_org_links WHERE trial_id = ?", (loser_id,))
-                conn.execute("INSERT OR IGNORE INTO trial_news_links (trial_id, news_id, match_method) SELECT ?, news_id, match_method FROM trial_news_links WHERE trial_id = ?", (survivor_id, loser_id))
-                conn.execute("DELETE FROM trial_news_links WHERE trial_id = ?", (loser_id,))
-                # Grant links reference trial_id too; reassign to the survivor (PK
-                # (grant_id, trial_id) → OR IGNORE drops any that would collide)
-                # before deleting the loser, so the link isn't orphaned/lost.
-                conn.execute("INSERT OR IGNORE INTO grant_trial_links (grant_id, trial_id, match_method) SELECT grant_id, ?, match_method FROM grant_trial_links WHERE trial_id = ?", (survivor_id, loser_id))
-                conn.execute("DELETE FROM grant_trial_links WHERE trial_id = ?", (loser_id,))
-                conn.execute("DELETE FROM trials WHERE id = ?", (loser_id,))
-
-        elif mc["entity_type"] == "organizations":
-            import json as _json
-            survivor = conn.execute("SELECT * FROM organizations WHERE id = ?", (survivor_id,)).fetchone()
-            loser = conn.execute("SELECT * FROM organizations WHERE id = ?", (loser_id,)).fetchone()
-            if not survivor:
-                raise HTTPException(status_code=400, detail=f"Survivor org {survivor_id} not found")
-            if loser:
-                # Merge aliases + therapeutic_focus arrays, preferring survivor for scalars.
-                def _merge_json_list(a, b):
-                    la = _json.loads(a or "[]") if a else []
-                    lb = _json.loads(b or "[]") if b else []
-                    out = list(la)
-                    for x in lb:
-                        if x not in out:
-                            out.append(x)
-                    return _json.dumps(out)
-
-                merged_aliases = _merge_json_list(survivor["aliases"], loser["aliases"])
-                # Add the loser's canonical_name as an alias too.
-                try:
-                    al = _json.loads(merged_aliases)
-                    if loser["canonical_name"] and loser["canonical_name"] not in al:
-                        al.append(loser["canonical_name"])
-                        merged_aliases = _json.dumps(al)
-                except Exception:
-                    pass
-                merged_focus = _merge_json_list(survivor["therapeutic_focus"], loser["therapeutic_focus"])
-
-                conn.execute(
-                    "UPDATE organizations SET aliases = ?, therapeutic_focus = ? WHERE id = ?",
-                    (merged_aliases, merged_focus, survivor_id),
-                )
-
-                # Reassign FK references: trial_org_links, organization_aliases, org_contacts.
-                conn.execute(
-                    "INSERT OR IGNORE INTO trial_org_links (trial_id, org_id, role) "
-                    "SELECT trial_id, ?, role FROM trial_org_links WHERE org_id = ?",
-                    (survivor_id, loser_id),
-                )
-                conn.execute("DELETE FROM trial_org_links WHERE org_id = ?", (loser_id,))
-                conn.execute(
-                    "UPDATE OR IGNORE organization_aliases SET org_id = ? WHERE org_id = ?",
-                    (survivor_id, loser_id),
-                )
-                conn.execute("DELETE FROM organization_aliases WHERE org_id = ?", (loser_id,))
-                conn.execute(
-                    "UPDATE org_contacts SET org_id = ? WHERE org_id = ?",
-                    (survivor_id, loser_id),
-                )
-
-                # Recompute trial_count on survivor and remove loser.
-                new_count = conn.execute(
-                    "SELECT COUNT(DISTINCT trial_id) FROM trial_org_links WHERE org_id = ?",
-                    (survivor_id,),
-                ).fetchone()[0]
-                conn.execute(
-                    "UPDATE organizations SET trial_count = ? WHERE id = ?",
-                    (new_count, survivor_id),
-                )
-                conn.execute("DELETE FROM organizations WHERE id = ?", (loser_id,))
-
-        now = datetime.utcnow().isoformat()
-        conn.execute(
-            """UPDATE merge_candidates SET status = 'CONFIRMED_MERGE', reviewed_by = ?,
-               reviewed_at = ?, merged_into = ?, loser_snapshot = ? WHERE id = ?""",
-            (body.reviewed_by, now, survivor_id, snapshot_json, merge_id),
-        )
-        conn.commit()
-        return {"status": "ok", "merged_into": survivor_id}
-    except HTTPException:
-        conn.rollback()
-        conn.close()
-        raise
-    except Exception as e:
-        conn.rollback()
-        conn.close()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
-@app.post("/merges/{merge_id}/undo")
-def undo_merge(merge_id: int):
-    """Restore the loser entity and pre-merge FK state from the snapshot taken at confirm time."""
-    import json as _json
-    conn = get_connection()
-    try:
-        mc = conn.execute("SELECT * FROM merge_candidates WHERE id = ?", (merge_id,)).fetchone()
-        if not mc:
-            raise HTTPException(status_code=404, detail="Merge candidate not found")
-        if mc["status"] != "CONFIRMED_MERGE":
-            raise HTTPException(status_code=400, detail=f"Can only undo CONFIRMED_MERGE candidates (current: {mc['status']})")
-        if not mc["loser_snapshot"]:
-            raise HTTPException(status_code=400, detail="No snapshot available — this merge was confirmed before undo was supported")
-
-        snapshot = _json.loads(mc["loser_snapshot"])
-        entity_type = mc["entity_type"]
-        survivor_id = mc["merged_into"] or mc["record_a_id"]
-        loser_id = mc["record_b_id"] if survivor_id == mc["record_a_id"] else mc["record_a_id"]
-
-        entity_table = "trials" if entity_type == "trials" else "organizations"
-        fk_tables = _TRIAL_FK_TABLES if entity_type == "trials" else _ORG_FK_TABLES
-
-        # Wipe current FK rows for both entities, then re-insert the pre-merge snapshot.
-        for table, col in fk_tables:
-            conn.execute(f"DELETE FROM {table} WHERE {col} IN (?, ?)", (survivor_id, loser_id))
-        for table, _ in fk_tables:
-            for row in snapshot["fk_pre_state"].get(table, []):
-                cols = list(row.keys())
-                placeholders = ",".join("?" * len(cols))
-                col_list = ",".join(cols)
-                conn.execute(
-                    f"INSERT OR IGNORE INTO {table} ({col_list}) VALUES ({placeholders})",
-                    [row[c] for c in cols],
-                )
-
-        # Restore loser + survivor rows to their pre-merge field values.
-        for row_key in ("loser_row", "survivor_row"):
-            row = snapshot.get(row_key)
-            if not row:
-                continue
-            cols = list(row.keys())
-            placeholders = ",".join("?" * len(cols))
-            col_list = ",".join(cols)
-            conn.execute(
-                f"INSERT OR REPLACE INTO {entity_table} ({col_list}) VALUES ({placeholders})",
-                [row[c] for c in cols],
-            )
-
-        # Reset the candidate to PENDING so it shows up again for review.
-        conn.execute(
-            """UPDATE merge_candidates
-               SET status = 'PENDING', reviewed_by = NULL, reviewed_at = NULL,
-                   merged_into = NULL, loser_snapshot = NULL WHERE id = ?""",
-            (merge_id,),
-        )
-        conn.commit()
-        return {"status": "ok", "restored_loser": loser_id}
-    except HTTPException:
-        conn.rollback()
-        conn.close()
-        raise
-    except Exception as e:
-        conn.rollback()
-        conn.close()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
 
-@app.post("/merges/{merge_id}/reject")
-def reject_merge(merge_id: int, body: Optional[MergeReview] = None):
-    conn = get_connection()
-    mc = conn.execute("SELECT id FROM merge_candidates WHERE id = ?", (merge_id,)).fetchone()
-    if not mc:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Not found")
-    reviewed_by = body.reviewed_by if body else ""
-    conn.execute(
-        "UPDATE merge_candidates SET status = 'REJECTED', reviewed_by = ?, reviewed_at = ? WHERE id = ?",
-        (reviewed_by, datetime.utcnow().isoformat(), merge_id),
-    )
-    conn.commit()
-    conn.close()
-    return {"status": "ok"}
 
 
-@app.post("/merges/{merge_id}/snooze")
-def snooze_merge(merge_id: int):
-    conn = get_connection()
-    mc = conn.execute("SELECT id FROM merge_candidates WHERE id = ?", (merge_id,)).fetchone()
-    if not mc:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Not found")
-    snooze_until = (datetime.utcnow() + timedelta(days=30)).isoformat()
-    conn.execute(
-        "UPDATE merge_candidates SET status = 'SNOOZED', snooze_until = ? WHERE id = ?",
-        (snooze_until, merge_id),
-    )
-    conn.commit()
-    conn.close()
-    return {"status": "ok", "snooze_until": snooze_until}
 
 
-@app.get("/merges/stats")
-def get_merge_stats():
-    conn = get_connection()
-    now = datetime.utcnow().isoformat()
-    week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
-
-    pending = conn.execute(
-        "SELECT COUNT(*) FROM merge_candidates WHERE status = 'PENDING'"
-    ).fetchone()[0]
-    snoozed = conn.execute(
-        "SELECT COUNT(*) FROM merge_candidates WHERE status = 'SNOOZED' AND snooze_until > ?",
-        (now,)
-    ).fetchone()[0]
-    confirmed_week = conn.execute(
-        "SELECT COUNT(*) FROM merge_candidates WHERE status = 'CONFIRMED_MERGE' AND reviewed_at >= ?",
-        (week_ago,)
-    ).fetchone()[0]
-    rejected_week = conn.execute(
-        "SELECT COUNT(*) FROM merge_candidates WHERE status = 'REJECTED' AND reviewed_at >= ?",
-        (week_ago,)
-    ).fetchone()[0]
-    auto_merged = conn.execute(
-        "SELECT COUNT(*) FROM merge_candidates WHERE status = 'CONFIRMED_MERGE' AND (reviewed_by IS NULL OR reviewed_by = '')"
-    ).fetchone()[0]
-    conn.close()
-
-    return {
-        "pending": pending,
-        "snoozed": snoozed,
-        "confirmed_this_week": confirmed_week,
-        "rejected_this_week": rejected_week,
-        "auto_merged": auto_merged,
-    }
 
 
-@app.get("/stats")
-def get_stats():
-    conn = get_connection()
-
-    total_trials = conn.execute("SELECT COUNT(*) FROM trials").fetchone()[0]
-    trials_with_news = conn.execute(
-        "SELECT COUNT(DISTINCT trial_id) FROM trial_news_links"
-    ).fetchone()[0]
-    total_news = conn.execute("SELECT COUNT(*) FROM news_items").fetchone()[0]
-    unlinked_news = conn.execute("SELECT COUNT(*) FROM news_items WHERE trial_id IS NULL").fetchone()[0]
-    total_orgs = conn.execute("SELECT COUNT(*) FROM organizations").fetchone()[0]
-
-    by_status = {
-        r["status"] or "Unknown": r["n"]
-        for r in conn.execute("SELECT status, COUNT(*) AS n FROM trials GROUP BY status").fetchall()
-    }
-    by_phase = {
-        r["phase"] or "Unknown": r["n"]
-        for r in conn.execute("SELECT phase, COUNT(*) AS n FROM trials GROUP BY phase").fetchall()
-    }
-    by_therapeutic_area = {
-        r["therapeutic_area"] or "Unknown": r["n"]
-        for r in conn.execute(
-            "SELECT therapeutic_area, COUNT(*) AS n FROM trials GROUP BY therapeutic_area"
-        ).fetchall()
-    }
-
-    eu_ctis_count = conn.execute(
-        "SELECT COUNT(*) FROM trials WHERE euct_id IS NOT NULL"
-    ).fetchone()[0]
-    eu_ctr_count = conn.execute(
-        "SELECT COUNT(*) FROM trials WHERE eudract_number IS NOT NULL"
-    ).fetchone()[0]
-    by_registry = {
-        r["registry"]: r["n"]
-        for r in conn.execute(
-            "SELECT registry, COUNT(*) AS n FROM registry_source_records GROUP BY registry"
-        ).fetchall()
-    }
-    by_country = {
-        r["lead_country"]: r["n"]
-        for r in conn.execute(
-            "SELECT lead_country, COUNT(*) AS n FROM trials "
-            "WHERE lead_country IS NOT NULL AND lead_country != '' "
-            "GROUP BY lead_country ORDER BY n DESC LIMIT 40"
-        ).fetchall()
-    }
-
-    last_ingested = conn.execute("SELECT MAX(ingested_at) FROM trials").fetchone()[0]
-    conn.close()
-
-    return {
-        "total_trials": total_trials,
-        "trials_with_news": trials_with_news,
-        "total_news": total_news,
-        "unlinked_news": unlinked_news,
-        "total_orgs": total_orgs,
-        "eu_ctis_count": eu_ctis_count,
-        "eu_ctr_count": eu_ctr_count,
-        "by_status": by_status,
-        "by_phase": by_phase,
-        "by_therapeutic_area": by_therapeutic_area,
-        "by_registry": by_registry,
-        "by_country": by_country,
-        "last_ingested": last_ingested,
-    }
 
 
-@app.get("/registries/stats")
-def get_registries_stats():
-    """Per-registry counts plus cross-registration breakdown."""
-    conn = get_connection()
-
-    per_registry = {
-        r["registry"]: r["n"]
-        for r in conn.execute(
-            "SELECT registry, COUNT(*) AS n FROM registry_source_records "
-            "GROUP BY registry ORDER BY n DESC"
-        ).fetchall()
-    }
-
-    # A trial is "cross-registered" if it has > 1 entry in registry_source_records.
-    cross_registered = conn.execute(
-        """
-        SELECT COUNT(*) FROM (
-            SELECT trial_id FROM registry_source_records
-            GROUP BY trial_id HAVING COUNT(*) > 1
-        )
-        """
-    ).fetchone()[0]
-
-    # Trials with an NCT cross-reference recorded in an EU registry row.
-    eu_with_nct = conn.execute(
-        """
-        SELECT COUNT(*) FROM trials
-        WHERE (euct_id IS NOT NULL OR eudract_number IS NOT NULL)
-          AND id LIKE 'NCT%'
-        """
-    ).fetchone()[0]
-
-    conn.close()
-
-    return {
-        "per_registry": per_registry,
-        "cross_registered_trials": cross_registered,
-        "eu_trials_with_nct_xref": eu_with_nct,
-    }
 
 
-@app.get("/grants/stats")
-def get_grants_stats():
-    conn = get_connection()
-    total_grants = conn.execute("SELECT COUNT(*) FROM grants").fetchone()[0]
-    active_grants = conn.execute("SELECT COUNT(*) FROM grants WHERE status = 'ACTIVE'").fetchone()[0]
-    grants_with_links = conn.execute("SELECT COUNT(*) FROM grants WHERE has_trial_link = 1").fetchone()[0]
-    total_funding = conn.execute(
-        "SELECT SUM(amount_usd) FROM grants WHERE amount_usd IS NOT NULL"
-    ).fetchone()[0] or 0
-    active_funding = conn.execute(
-        "SELECT SUM(amount_usd) FROM grants WHERE status = 'ACTIVE' AND amount_usd IS NOT NULL"
-    ).fetchone()[0] or 0
-    by_source = {
-        r["source"]: r["n"]
-        for r in conn.execute("SELECT source, COUNT(*) AS n FROM grants GROUP BY source").fetchall()
-    }
-    by_area = {
-        r["therapeutic_area"] or "Other": r["n"]
-        for r in conn.execute(
-            "SELECT therapeutic_area, COUNT(*) AS n FROM grants GROUP BY therapeutic_area"
-        ).fetchall()
-    }
-    by_country = {
-        r["country"]: r["n"]
-        for r in conn.execute(
-            "SELECT country, COUNT(*) AS n FROM grants "
-            "WHERE country IS NOT NULL AND country != '' "
-            "GROUP BY country ORDER BY n DESC LIMIT 30"
-        ).fetchall()
-    }
-    conn.close()
-    return {
-        "total_grants": total_grants,
-        "active_grants": active_grants,
-        "grants_with_trial_links": grants_with_links,
-        "total_funding_usd": total_funding,
-        "active_funding_usd": active_funding,
-        "by_source": by_source,
-        "by_therapeutic_area": by_area,
-        "by_country": by_country,
-    }
 
 
-@app.get("/grants/filter-options")
-def get_grants_filter_options():
-    conn = get_connection()
-    activity_codes = [
-        r[0] for r in conn.execute(
-            "SELECT DISTINCT activity_code FROM grants "
-            "WHERE activity_code IS NOT NULL ORDER BY activity_code"
-        ).fetchall()
-    ]
-    org_types = [
-        r[0] for r in conn.execute(
-            "SELECT DISTINCT org_type FROM grants "
-            "WHERE org_type IS NOT NULL ORDER BY org_type"
-        ).fetchall()
-    ]
-    research_types = [
-        r[0] for r in conn.execute(
-            "SELECT DISTINCT research_type FROM grants "
-            "WHERE research_type IS NOT NULL ORDER BY research_type"
-        ).fetchall()
-    ]
-    agency_divisions = [
-        r[0] for r in conn.execute(
-            "SELECT agency_division, COUNT(*) AS n FROM grants "
-            "WHERE agency_division IS NOT NULL "
-            "GROUP BY agency_division ORDER BY n DESC LIMIT 20"
-        ).fetchall()
-    ]
-    conn.close()
-    return {
-        "activity_codes": activity_codes,
-        "org_types": org_types,
-        "research_types": research_types,
-        "agency_divisions": agency_divisions,
-    }
 
 
 def _grants_where(q, source, therapeutic_area, status, country, country_q,
@@ -1854,71 +819,6 @@ def _grants_order_by(sort, sort_dir):
                             "aicure_fit", "ingested_at DESC")
 
 
-@app.get("/grants")
-def get_grants(
-    q: Optional[str] = None,
-    source: Optional[List[str]] = Query(default=None),
-    therapeutic_area: Optional[List[str]] = Query(default=None),
-    status: Optional[List[str]] = Query(default=None),
-    country: Optional[List[str]] = Query(default=None),
-    country_q: Optional[str] = None,
-    country_q_not: Optional[str] = None,
-    has_trial_link: Optional[bool] = None,
-    min_amount: Optional[int] = None,
-    max_amount: Optional[int] = None,
-    activity_code: Optional[List[str]] = Query(default=None),
-    org_type: Optional[List[str]] = Query(default=None),
-    research_type: Optional[List[str]] = Query(default=None),
-    agency_division: Optional[List[str]] = Query(default=None),
-    fiscal_year_min: Optional[int] = None,
-    fiscal_year_max: Optional[int] = None,
-    award_date_from: Optional[str] = None,
-    award_date_to: Optional[str] = None,
-    sort: Optional[str] = "aicure_fit",
-    sort_dir: str = Query("desc", alias="dir"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(100, ge=1, le=500),
-):
-    # Build the WHERE first: _iso_day() can raise 422 on a bad date param, and
-    # doing it before opening the connection avoids leaking one on that path.
-    where_sql, params = _grants_where(
-        q, source, therapeutic_area, status, country, country_q, country_q_not,
-        has_trial_link, min_amount, max_amount, activity_code, org_type,
-        research_type, agency_division, fiscal_year_min, fiscal_year_max,
-        award_date_from, award_date_to)
-    conn = get_connection()
-
-    # One pass for both header aggregates instead of two scans of the same
-    # filtered set.
-    total, total_funding = conn.execute(
-        f"SELECT COUNT(*), COALESCE(SUM(amount_usd), 0) FROM grants {where_sql}",
-        params,
-    ).fetchone()
-    offset = (page - 1) * page_size
-
-    # aicure_fit is precomputed (score_backfill.py) into a real column, so the
-    # default fit ranking paginates server-side like any other sort.
-    rows = conn.execute(
-        f"SELECT {_GRANT_GRID_COLS} FROM grants {where_sql} "
-        f"{_grants_order_by(sort, sort_dir)} LIMIT ? OFFSET ?",
-        params + [page_size, offset],
-    ).fetchall()
-
-    results = [row_to_dict(r) for r in rows]
-    # Fallback for any row not yet backfilled (e.g. just uploaded). The scorer
-    # reads abstract, which the grid SELECT omits — re-fetch for those rows.
-    unscored = [g["id"] for g in results if g.get("aicure_fit") is None]
-    if unscored:
-        placeholders = ",".join("?" * len(unscored))
-        abstracts = dict(conn.execute(
-            f"SELECT id, abstract FROM grants WHERE id IN ({placeholders})",
-            unscored,
-        ).fetchall())
-        for g in results:
-            if g.get("aicure_fit") is None:
-                g["aicure_fit"] = score_grant({**g, "abstract": abstracts.get(g["id"])})
-    conn.close()
-    return {"total": total, "total_funding": total_funding, "page": page, "results": results}
 
 
 # (field, CSV header) — mirrors the Funding grid, score first.
@@ -1982,169 +882,51 @@ def _csv_stream(name, columns, row_query, params, postprocess=None):
 
 
 # Declared before /grants/{grant_id} so "export" isn't captured as a grant id.
-@app.get("/grants/export")
-def export_grants(
-    q: Optional[str] = None,
-    source: Optional[List[str]] = Query(default=None),
-    therapeutic_area: Optional[List[str]] = Query(default=None),
-    status: Optional[List[str]] = Query(default=None),
-    country: Optional[List[str]] = Query(default=None),
-    country_q: Optional[str] = None,
-    country_q_not: Optional[str] = None,
-    has_trial_link: Optional[bool] = None,
-    min_amount: Optional[int] = None,
-    max_amount: Optional[int] = None,
-    activity_code: Optional[List[str]] = Query(default=None),
-    org_type: Optional[List[str]] = Query(default=None),
-    research_type: Optional[List[str]] = Query(default=None),
-    agency_division: Optional[List[str]] = Query(default=None),
-    fiscal_year_min: Optional[int] = None,
-    fiscal_year_max: Optional[int] = None,
-    award_date_from: Optional[str] = None,
-    award_date_to: Optional[str] = None,
-    sort: Optional[str] = "aicure_fit",
-    sort_dir: str = Query("desc", alias="dir"),
-):
-    """Stream the FULL filtered grant set as CSV (honors the grid's filters +
-    sort). Unlike the client-side export, this covers every matching row, not
-    just the pages currently loaded into the infinite-scroll grid."""
-    where_sql, params = _grants_where(
-        q, source, therapeutic_area, status, country, country_q, country_q_not,
-        has_trial_link, min_amount, max_amount, activity_code, org_type,
-        research_type, agency_division, fiscal_year_min, fiscal_year_max,
-        award_date_from, award_date_to)
-
-    def postprocess(g):
-        if g.get("aicure_fit") is None:
-            g["aicure_fit"] = score_grant(g)
-
-    return _csv_stream(
-        "grants", _GRANT_EXPORT_COLUMNS,
-        f"SELECT * FROM grants {where_sql} {_grants_order_by(sort, sort_dir)}",
-        params, postprocess)
 
 
-@app.get("/grants/{grant_id}/trials")
-def get_grant_trials(grant_id: str):
-    conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT t.*, gtl.match_method
-        FROM trials t
-        JOIN grant_trial_links gtl ON t.id = gtl.trial_id
-        WHERE gtl.grant_id = ?
-        ORDER BY gtl.match_method
-        """,
-        (grant_id,),
-    ).fetchall()
-    conn.close()
-    return [row_to_dict(r) for r in rows]
 
 
-@app.get("/grants/{grant_id}")
-def get_grant(grant_id: str):
-    conn = get_connection()
-    row = conn.execute("SELECT * FROM grants WHERE id = ?", (grant_id,)).fetchone()
-    conn.close()
-    if not row:
-        raise HTTPException(status_code=404, detail="Grant not found")
-    return row_to_dict(row)
 
 
-@app.post("/admin/refresh-news")
-def admin_refresh_news(x_admin_key: str = Header(default="")):
-    """Manually trigger a news refresh + cleanup. Protected by X-Admin-Key header."""
-    _require_admin(x_admin_key)
-    # Hold the lock for the whole job, not just this check: releasing it here made
-    # the 409 "already in progress" guard decorative (a second call would acquire
-    # the just-freed lock and start a concurrent refresh). The worker releases it
-    # in finally.
-    if not _news_refresh_lock.acquire(blocking=False):
-        raise HTTPException(status_code=409, detail="Refresh already in progress")
-
-    def _refresh_job():
-        # run_daily_news re-raises on refresh failure ON PURPOSE; routing it
-        # through a daemon thread would otherwise re-hide that. The endpoint
-        # already returned {"started"}, so log the traceback or the operator who
-        # triggered the manual refresh never learns it failed.
-        try:
-            run_daily_news()
-        except Exception:
-            print("[admin] background news refresh FAILED:")
-            traceback.print_exc()
-        finally:
-            _news_refresh_lock.release()
-
-    try:
-        thread = threading.Thread(target=_refresh_job, daemon=True)
-        thread.start()
-    except Exception:
-        _news_refresh_lock.release()  # never leak the lock if the thread won't start
-        raise
-    return {"status": "started", "message": "News refresh running in background"}
 
 
-@app.post("/admin/send-news-digest")
-def admin_send_news_digest(refresh: bool = True, x_admin_key: str = Header(default="")):
-    """Refresh news (unless refresh=false) then build + SEND the daily news
-    digest. Protected by X-Admin-Key. Meant to be hit by an external daily cron
-    so delivery works even while the free-tier Render service is asleep (the
-    request wakes it). Runs synchronously and returns the emailer result so the
-    caller gets a real status (sent / skipped-empty / error)."""
-    _require_admin(x_admin_key)
-    try:
-        detail = run_daily_news_and_send(refresh=refresh)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"digest send failed: {e}")
-    return {"status": "ok", "detail": detail}
 
 
-@app.post("/admin/send-weekly-digest")
-def admin_send_weekly_digest(x_admin_key: str = Header(default="")):
-    """Build + SEND the weekly trials and grants digests (two emails) from the
-    CURRENT DB. Read-only keyword scoring, no ingest — so it's light enough to
-    run on free-tier Render. Driven by the weekly GitHub Actions cron. Note:
-    content freshness is bounded by how recently the DB was ingested/deployed;
-    this endpoint does not scrape (see the ingest discussion in the PR)."""
-    _require_admin(x_admin_key)
-    import emailer
-    try:
-        trials = emailer.send_weekly_trials_digest()
-        grants = emailer.send_weekly_grants_digest()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"weekly digest send failed: {e}")
-    return {"status": "ok", "trials": trials, "grants": grants}
 
 
-@app.post("/admin/prune-old")
-def admin_prune_old(
-    background_tasks: BackgroundTasks,
-    dry_run: bool = True,
-    cutoff_days: int = 365,
-    x_admin_key: str = Header(default=""),
-):
-    """Remove trials/grants with primary_completion/end_date older than cutoff_days.
 
-    Defaults to dry_run=True; pass dry_run=false to actually delete.
-    """
-    _require_admin(x_admin_key)
-    from prune_old import prune_old
-    if dry_run:
-        trial_count, grant_count = prune_old(dry_run=True, cutoff_days=cutoff_days)
-        return {"trials_pruned": trial_count, "grants_pruned": grant_count, "dry_run": True}
-    def _prune_job():
-        # Destructive delete in the background: the caller already got
-        # {"started"}, so log the outcome (and any failure's traceback) — there's
-        # otherwise no durable record that the prune ran, partially ran, or died.
-        try:
-            t, g = prune_old(dry_run=False, cutoff_days=cutoff_days)
-            print(f"[admin] background prune done: {t} trials, {g} grants removed (cutoff_days={cutoff_days})")
-        except Exception:
-            print("[admin] background prune FAILED:")
-            traceback.print_exc()
 
-    background_tasks.add_task(_prune_job)
-    return {"status": "started", "message": "Prune running in background", "dry_run": False}
+# ── Mount the resource routers (handlers split into routes/*.py) ──────────────
+from routes import trials, news, orgs, grants, merges, misc, admin  # noqa: E402 (after app + helpers)
+app.include_router(trials.router)
+app.include_router(news.router)
+app.include_router(orgs.router)
+app.include_router(grants.router)
+app.include_router(merges.router)
+app.include_router(misc.router)
+app.include_router(admin.router)
+
+# Re-export the moved handlers so `from api import <handler>` keeps working (e.g.
+# test_merge calls confirm_merge/undo_merge directly to exercise merge logic).
+from routes.trials import (  # noqa: E402,F401
+    get_trials, export_trials, get_trial, get_trial_registries, get_trial_news,
+)
+from routes.news import get_news, export_news  # noqa: E402,F401
+from routes.orgs import (  # noqa: E402,F401
+    get_orgs, get_org, get_org_trials, get_org_contacts, add_org_contact,
+    enrich_org_contacts_route, patch_org, get_relationships,
+)
+from routes.grants import (  # noqa: E402,F401
+    get_grants_stats, get_grants_filter_options, get_grants, export_grants,
+    get_grant_trials, get_grant,
+)
+from routes.merges import (  # noqa: E402,F401
+    get_merges, confirm_merge, undo_merge, reject_merge, snooze_merge, get_merge_stats,
+)
+from routes.misc import upload_file, get_stats, get_registries_stats  # noqa: E402,F401
+from routes.admin import (  # noqa: E402,F401
+    admin_refresh_news, admin_send_news_digest, admin_send_weekly_digest, admin_prune_old,
+)
 
 
 # Serve the built React SPA from /frontend/dist for single-service deploys
