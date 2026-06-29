@@ -6,45 +6,19 @@ from datetime import datetime
 from db import get_connection
 from registry_utils import upsert_trial
 # Shared classifier / keyword-flag helper (was a divergent local copy here).
-from text_match import flag, classify_area
+from text_match import flag, classify_area, TARGET_CONDITIONS
 
 SNAPSHOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "snapshots")
 os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
 BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 
-# Indication-driven search terms (general indications / drug *classes*, not brand
-# names). Ordered to lead with AiCure's real won-deal focus — CNS / psychiatry &
-# neurology — then cardiometabolic as a secondary net. Brand-name detection still
-# happens downstream via text_match.DRUG_KEYWORDS; the search itself stays general.
-CONDITIONS = [
-    # CNS / psychiatry (primary)
-    "schizophrenia",
-    "major depressive disorder",
-    "treatment resistant depression",
-    "bipolar disorder",
-    "post-traumatic stress disorder",
-    "generalized anxiety disorder",
-    "attention deficit hyperactivity disorder",
-    "substance use disorder",
-    "alcohol use disorder",
-    "opioid use disorder",
-    "tardive dyskinesia",
-    # Neurology (primary)
-    "Parkinson disease",
-    "Alzheimer disease",
-    "Huntington disease",
-    "amyotrophic lateral sclerosis",
-    "multiple sclerosis",
-    "epilepsy",
-    "essential tremor",
-    # Cardiometabolic (secondary)
-    "obesity",
-    "type 2 diabetes",
-    "heart failure",
-    "atrial fibrillation",
-    "GLP-1",
-]
+# Indication-driven CT.gov search terms (general indications / drug *classes*, not
+# brand names). Derived from the canonical target-condition taxonomy in text_match
+# (TARGET_CONDITIONS) so the search net and the scorer/classifier share one source
+# and a re-target edits one place; a drift test asserts every term classifies
+# in-focus. Brand-name detection still happens downstream via DRUG_KEYWORDS.
+CONDITIONS = [term for _area, term in TARGET_CONDITIONS]
 
 _EPRO_KEYWORDS = [
     "epro", "ecoa", "patient-reported outcome", "patient reported outcome",

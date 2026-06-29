@@ -10,6 +10,7 @@ except ImportError:
     _HAS_PLAYWRIGHT = False
 
 from grant_utils import (
+    build_grant_record,
     classify_area, upsert_grant, is_human_subjects,
     extract_phase, extract_conditions, extract_interventions,
 )
@@ -142,7 +143,6 @@ def pull_pcori():
                     status = "COMPLETED" if "complet" in status_raw.lower() else "ACTIVE"
 
                     slug = proj_url.rstrip("/").split("/")[-1]
-                    nct = extract_nct(title)
 
                     record = {
                         "id": f"PCORI-{slug}",
@@ -157,16 +157,9 @@ def pull_pcori():
                         "currency": "USD",
                         "country": "US",
                         "status": status,
-                        "therapeutic_area": classify_area(combined),
-                        "conditions": extract_conditions(combined),
-                        "interventions": extract_interventions(combined),
-                        "phase_mentioned": extract_phase(combined),
                         "source_url": proj_url,
-                        "linked_trial_id": nct,
-                        "has_trial_link": 1 if nct else 0,
-                        "human_subjects": int(is_human_subjects(combined)),
                     }
-                    upsert_grant(record, conn)
+                    upsert_grant(build_grant_record(combined, **record), conn)
                     total_inserted += 1
 
                 conn.commit()

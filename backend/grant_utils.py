@@ -32,6 +32,12 @@ MEDICAL_KEYWORDS = [
 
 PHASE_PATTERN = re.compile(r'\bphase\s*(1|2|3|4|I{1,3}V?)\b', re.IGNORECASE)
 
+# Condition names to EXTRACT from grant text (substring match in extract_conditions).
+# Intentionally broader than the CT.gov search net (text_match.TARGET_CONDITIONS) —
+# extraction tags any mentioned condition, even off-core ones — and uses extraction
+# spelling (e.g. "Parkinson's disease" with the apostrophe). The shared classifier
+# (text_match.classify_area) is what decides in/off-focus scoring, so this list and
+# the search net can differ without harm.
 CONDITION_KEYWORDS = [
     # CNS / psychiatry & neurology (primary)
     "schizophrenia", "major depressive disorder", "depression", "PTSD",
@@ -129,11 +135,12 @@ def extract_interventions(text: str) -> str:
     return json.dumps(list(dict.fromkeys(found)))
 
 
-# Columns upsert_grant is allowed to write. Guards the dynamic column-name
-# interpolation below: column names come from record.keys() (ultimately derived
-# from external grant-API field maps), so an unexpected key must be rejected
-# rather than spliced into the SQL. Keep in sync with the grants schema in db.py.
-_GRANT_COLUMNS = frozenset({
+# Canonical grant column set — ONE source of truth. _GRANT_COLUMNS (the upsert
+# allowlist that guards the dynamic column-name interpolation below — column names
+# come from record.keys(), ultimately from external grant-API field maps, so an
+# unexpected key must be rejected rather than spliced into SQL) is derived from it.
+# Keep aligned with the grants schema in db.py.
+GRANT_RECORD_FIELDS = (
     "id", "source", "award_id", "title", "abstract", "pi_name", "pi_email",
     "organization", "org_type", "sponsor_funder", "amount_usd", "currency",
     "amount_original", "start_date", "end_date", "award_date", "status",
@@ -142,7 +149,39 @@ _GRANT_COLUMNS = frozenset({
     "ingested_at", "has_trial_link", "aicure_fit", "activity_code",
     "agency_division", "fiscal_year", "project_acronym", "research_type",
     "first_seen", "human_subjects",
-})
+)
+_GRANT_COLUMNS = frozenset(GRANT_RECORD_FIELDS)
+
+# Columns build_grant_record DERIVES from the title+abstract text blob — adding a
+# new derived column means editing here once, not in all 7 per-source pullers.
+_DERIVED_GRANT_FIELDS = (
+    "therapeutic_area", "conditions", "interventions", "phase_mentioned",
+    "linked_trial_id", "has_trial_link", "human_subjects",
+)
+
+
+def build_grant_record(text: str, **fields) -> dict:
+    """Assemble a grant record from a puller's explicit `**fields`, deriving the
+    computed columns (see _DERIVED_GRANT_FIELDS) from `text` — the title+abstract
+    blob. Collapses the identical derivation block the 7 grant pullers each used to
+    repeat, so a future derived column lands here only. Explicit values in `fields`
+    win (a puller that already resolved e.g. a linked trial id can pass it)."""
+    t = text or ""
+    nct = extract_nct(t)
+    record = {
+        "therapeutic_area": classify_area(t),
+        "conditions": extract_conditions(t),
+        "interventions": extract_interventions(t),
+        "phase_mentioned": extract_phase(t),
+        "linked_trial_id": nct,
+        "has_trial_link": 1 if nct else 0,
+        "human_subjects": int(is_human_subjects(t)),
+    }
+    record.update(fields)
+    # Keep has_trial_link consistent if a puller supplied its own linked_trial_id.
+    if "linked_trial_id" in fields:
+        record["has_trial_link"] = 1 if fields["linked_trial_id"] else 0
+    return record
 
 
 def upsert_grant(record: dict, conn=None):

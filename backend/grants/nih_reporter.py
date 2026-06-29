@@ -6,6 +6,7 @@ from datetime import datetime
 import requests
 
 from grant_utils import (
+    build_grant_record,
     is_medical, is_human_subjects, classify_area, upsert_grant,
     extract_phase, extract_conditions, extract_interventions,
 )
@@ -119,7 +120,6 @@ def pull_nih_reporter():
                     start = proj.get("project_start_date") or ""
                     fiscal_year = int(start[:4]) if start and start[:4].isdigit() else None
 
-                nct = extract_nct(combined)
                 record = {
                     "id": f"NIH-{proj['project_num']}",
                     "source": "NIH_REPORTER",
@@ -141,17 +141,10 @@ def pull_nih_reporter():
                     "end_date": proj.get("project_end_date"),
                     "award_date": proj.get("award_notice_date"),
                     "status": "ACTIVE" if proj.get("is_active") else "COMPLETED",
-                    "therapeutic_area": classify_area(combined),
                     "country": proj.get("org_country", "US"),
                     "source_url": proj.get("project_detail_url"),
-                    "conditions": extract_conditions(combined),
-                    "interventions": extract_interventions(combined),
-                    "phase_mentioned": extract_phase(combined),
-                    "linked_trial_id": nct,
-                    "has_trial_link": 1 if nct else 0,
-                    "human_subjects": int(is_human_subjects(combined)),
                 }
-                upsert_grant(record, conn)
+                upsert_grant(build_grant_record(combined, **record), conn)
                 total_inserted += 1
             except Exception as e:
                 print(f"  [WARN] NIH record error: {e}")

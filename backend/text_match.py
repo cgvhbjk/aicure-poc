@@ -110,3 +110,40 @@ def classify_area(text: str) -> str:
     if "adher" in t or "compliance" in t:
         return "Adherence / Outcomes"
     return "Other"
+
+
+# ── Canonical target-condition taxonomy ───────────────────────────────────────
+# Single source of truth for "what AiCure hunts for": each (area, search_term)
+# pairs a condition with the bucket classify_area MUST sort it into. ct_puller
+# derives its ClinicalTrials.gov search list (CONDITIONS) from this, and the test
+# suite asserts classify_area(term) == area for EVERY entry — so the search net
+# and the scorer/classifier can't silently drift apart (a searched-for condition
+# the classifier files as "Other" would be scored off-focus and suppressed).
+# Search-term spelling is tuned for the CT.gov API (e.g. "Parkinson disease", no
+# apostrophe); the classifier above matches on stems. Ordered CNS/psych →
+# neurology → cardiometabolic to mirror the won-deal focus.
+TARGET_CONDITIONS = [
+    ("CNS / Psychiatry", "schizophrenia"),
+    ("CNS / Psychiatry", "major depressive disorder"),
+    ("CNS / Psychiatry", "treatment resistant depression"),
+    ("CNS / Psychiatry", "bipolar disorder"),
+    ("CNS / Psychiatry", "post-traumatic stress disorder"),
+    ("CNS / Psychiatry", "generalized anxiety disorder"),
+    ("CNS / Psychiatry", "attention deficit hyperactivity disorder"),
+    ("CNS / Psychiatry", "substance use disorder"),
+    ("CNS / Psychiatry", "alcohol use disorder"),
+    ("CNS / Psychiatry", "opioid use disorder"),
+    ("CNS / Psychiatry", "tardive dyskinesia"),
+    ("Neurology", "Parkinson disease"),
+    ("Neurology", "Alzheimer disease"),
+    ("Neurology", "Huntington disease"),
+    ("Neurology", "amyotrophic lateral sclerosis"),
+    ("Neurology", "multiple sclerosis"),
+    ("Neurology", "epilepsy"),
+    ("Neurology", "essential tremor"),
+    ("Metabolic / GLP-1", "obesity"),
+    ("Diabetes", "type 2 diabetes"),
+    ("Cardiovascular", "heart failure"),
+    ("Cardiovascular", "atrial fibrillation"),
+    ("Metabolic / GLP-1", "GLP-1"),
+]

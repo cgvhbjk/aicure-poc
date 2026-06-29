@@ -6,6 +6,7 @@ from datetime import datetime
 import requests
 
 from grant_utils import (
+    build_grant_record,
     is_medical, is_human_subjects, classify_area, upsert_grant,
     extract_phase, extract_conditions, extract_interventions,
 )
@@ -89,7 +90,6 @@ def pull_ada():
                     seen_awards.add(award_id)
 
                     year = _pub_year(item)
-                    nct = extract_nct(combined)
                     slug = re.sub(r"[^a-z0-9]+", "-", award_id.lower())[:80].strip("-")
 
                     record = {
@@ -106,16 +106,9 @@ def pull_ada():
                         "award_date": f"{year}-01-01" if year else None,
                         "country": "US",
                         "status": "COMPLETED" if year and year < 2024 else "ACTIVE",
-                        "therapeutic_area": classify_area(combined),
-                        "conditions": extract_conditions(combined),
-                        "interventions": extract_interventions(combined),
-                        "phase_mentioned": extract_phase(combined),
                         "source_url": item.get("URL") or f"https://doi.org/{doi}",
-                        "linked_trial_id": nct,
-                        "has_trial_link": 1 if nct else 0,
-                        "human_subjects": int(is_human_subjects(combined)),
                     }
-                    upsert_grant(record, conn)
+                    upsert_grant(build_grant_record(combined, **record), conn)
                     total_inserted += 1
             except Exception as e:
                 print(f"  [WARN] ADA record error: {e}")
