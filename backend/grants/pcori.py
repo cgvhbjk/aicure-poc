@@ -10,7 +10,7 @@ except ImportError:
     _HAS_PLAYWRIGHT = False
 
 from grant_utils import (
-    classify_area, upsert_grant,
+    classify_area, upsert_grant, is_human_subjects,
     extract_phase, extract_conditions, extract_interventions,
 )
 from registry_utils import extract_nct
@@ -164,6 +164,7 @@ def pull_pcori():
                         "source_url": proj_url,
                         "linked_trial_id": nct,
                         "has_trial_link": 1 if nct else 0,
+                        "human_subjects": int(is_human_subjects(combined)),
                     }
                     upsert_grant(record, conn)
                     total_inserted += 1

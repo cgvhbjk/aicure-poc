@@ -5,16 +5,16 @@ import { v4 as uuidv4 } from 'uuid'
 const NEWS_SOURCES = [
   'Fierce Pharma', 'Endpoints News', 'PharmaVoice',
   'TrialSite News', 'BioPharma Dive', 'STAT News', 'BioSpace',
-  'Google News — GLP-1', 'Google News — Semaglutide', 'Google News — Tirzepatide',
-  'Google News — Obesity trial', 'Google News — Weight loss', 'Google News — T2D trial',
-  'Google News — Heart failure', 'Google News — A-fib trial',
+  // CNS / neuro-led Google News queries (mirror rss_parser.py RSS_FEEDS).
+  'Google News — Schizophrenia', 'Google News — Depression', 'Google News — PTSD',
+  'Google News — Bipolar', 'Google News — ADHD', 'Google News — Addiction',
+  'Google News — Parkinson', 'Google News — Alzheimer', 'Google News — ALS',
+  'Google News — Epilepsy', 'Google News — CNS initiated',
   'Google News — First patient', 'Google News — IND filing',
-  // Broader-net cardiometabolic / early-stage queries (added in rss_parser.py).
-  'Google News — Obesity initiated', 'Google News — Oral GLP-1',
-  'Google News — Diabetes DCT', 'Google News — Adherence trial',
-  'Google News — CV outcomes', 'Google News — NASH trial',
-  'Google News — Heart failure new', 'Google News — Weight protocol',
-  'Google News — Obesity sponsor', 'Google News — Tirzepatide CV',
+  'Google News — Adherence trial', 'Google News — DCT', 'Google News — Biotech M&A',
+  'Google News — Obesity trial', 'Google News — T2D trial', 'Google News — Heart failure',
+  // SEC EDGAR (10-Q-first early-development + 8-K M&A; see backend/sec_puller.py).
+  'SEC EDGAR — 10-Q', 'SEC EDGAR — 10-K', 'SEC EDGAR — 8-K',
 ]
 
 export const NEWS_FILTER_FIELDS = [
@@ -29,6 +29,10 @@ export const NEWS_FILTER_FIELDS = [
   { key: 'is_results',        label: 'Trial Results',      type: 'boolean', hint: 'Show only trial results/findings articles (●).' },
 ]
 
+// One consolidated filter surface for the Funding/grants page (the separate
+// checkbox sidebar was removed). The org_type / activity_code / research_type /
+// agency_division options come from /grants/filter-options via the `dynamic` keys
+// resolved in ConditionBuilder (FundingTable passes them through FilterBar).
 export const FUNDING_FILTER_FIELDS = [
   { key: 'q',               label: 'Search',           type: 'text'    },
   {
@@ -37,12 +41,18 @@ export const FUNDING_FILTER_FIELDS = [
     displayFn: (v) => v.replace(/_/g, ' '),
   },
   { key: 'therapeutic_area', label: 'Therapeutic Area', type: 'select',
-    options: ['Metabolic / GLP-1', 'Diabetes', 'Cardiovascular', 'Adherence / Outcomes', 'Other'],
+    options: ['CNS / Psychiatry', 'Neurology', 'Metabolic / GLP-1', 'Diabetes',
+              'Cardiovascular', 'Liver / NASH', 'Renal', 'Adherence / Outcomes', 'Other'],
   },
   { key: 'status',    label: 'Status',      type: 'select',  options: ['ACTIVE', 'COMPLETED', 'UNKNOWN'] },
+  { key: 'org_type',  label: 'Org Type',    type: 'select',  dynamic: 'org_types' },
+  { key: 'activity_code',   label: 'Award Type',        type: 'select', dynamic: 'activity_codes' },
+  { key: 'research_type',   label: 'Research Type',      type: 'select', dynamic: 'research_types' },
+  { key: 'agency_division', label: 'Agency / Division',  type: 'select', dynamic: 'agency_divisions' },
   { key: 'country',   label: 'Country',     type: 'text'    },
   { key: 'award_date',label: 'Award Date',  type: 'date'    },
   { key: 'amount_usd',label: 'Amount (USD)',type: 'number'  },
+  { key: 'fiscal_year', label: 'Fiscal Year', type: 'number' },
   { key: 'has_trial_link', label: 'Has Trial Link', type: 'boolean', hint: 'Show only grants linked to a trial.' },
 ]
 
@@ -53,8 +63,9 @@ export const FILTER_FIELDS = [
     displayFn: (v) => v.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()),
   },
   {
+    // Phase 4 (post-marketing) is out of AiCure's scope — dropped from the filter.
     key: 'phase', label: 'Phase', type: 'select',
-    options: ['PHASE1', 'PHASE2', 'PHASE3', 'PHASE4', 'EARLY_PHASE1'],
+    options: ['PHASE1', 'PHASE2', 'PHASE3', 'EARLY_PHASE1'],
     displayFn: (v) => v.replace('PHASE', 'Phase ').replace('EARLY_', 'Early '),
   },
   { key: 'therapeutic_area', label: 'Therapeutic Area', type: 'select', dynamic: 'therapeutic_areas' },
@@ -264,9 +275,14 @@ export function compileFundingConditions(conditions) {
       case 'source':           applyMultiSelect(apiParams, c, 'source'); break
       case 'therapeutic_area': applyMultiSelect(apiParams, c, 'therapeutic_area'); break
       case 'status':           applyMultiSelect(apiParams, c, 'status'); break
+      case 'org_type':         applyMultiSelect(apiParams, c, 'org_type'); break
+      case 'activity_code':    applyMultiSelect(apiParams, c, 'activity_code'); break
+      case 'research_type':    applyMultiSelect(apiParams, c, 'research_type'); break
+      case 'agency_division':  applyMultiSelect(apiParams, c, 'agency_division'); break
       case 'country':          applyTextLike(apiParams, c, 'country_q'); break
       case 'award_date':       applyDateRange(apiParams, c, 'award_date_from', 'award_date_to'); break
       case 'amount_usd':       applyNumberRange(apiParams, c, 'min_amount', 'max_amount'); break
+      case 'fiscal_year':      applyNumberRange(apiParams, c, 'fiscal_year_min', 'fiscal_year_max'); break
       case 'has_trial_link':   applyBoolean(apiParams, c, 'has_trial_link'); break
       default: break
     }

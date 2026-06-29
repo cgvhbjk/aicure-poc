@@ -246,28 +246,11 @@ export default function FundingTable({
   const [error, setError] = useState(null)
   const [selectedGrant, setSelectedGrant] = useState(null)
   const [fieldsOpen, setFieldsOpen] = useState(false)
-  const [filterOpen, setFilterOpen] = useState(false)
 
-  // Sidebar filter state. The inline FilterBar handles q/source/area/status/
-  // country/award_date/amount/has_trial_link; the sidebar covers the
-  // remaining backend params (org_type, activity_code, research_type,
-  // agency_division, fiscal_year_*) that don't yet have ConditionBuilder
-  // entries.
-  const [selectedSources, setSelectedSources] = useState([])
-  const [selectedAreas, setSelectedAreas] = useState([])
-  const [selectedStatuses, setSelectedStatuses] = useState([])
-  const [selectedCountries, setSelectedCountries] = useState([])
-  const [selectedActivityCodes, setSelectedActivityCodes] = useState([])
-  const [selectedOrgTypes, setSelectedOrgTypes] = useState([])
-  const [selectedResearchTypes, setSelectedResearchTypes] = useState([])
-  const [selectedDivisions, setSelectedDivisions] = useState([])
-  const [hasTrialOnly, setHasTrialOnly] = useState(false)
-  const [minAmount, setMinAmount] = useState('')
-  const [maxAmount, setMaxAmount] = useState('')
-  const [fiscalYearMin, setFiscalYearMin] = useState('')
-  const [fiscalYearMax, setFiscalYearMax] = useState('')
-
-  // Dynamic filter options from backend
+  // Dynamic filter options from backend (org types / award types / research
+  // types / agency divisions). Fed to the inline FilterBar's ConditionBuilder via
+  // `dynamicOptions` so the single consolidated filter covers them too — the old
+  // duplicate checkbox sidebar was removed.
   const [filterOptions, setFilterOptions] = useState({
     activity_codes: [], org_types: [], research_types: [], agency_divisions: [],
   })
@@ -279,25 +262,9 @@ export default function FundingTable({
       .catch(console.error)
   }, [])
 
-  const toggle = (setFn) => (item) =>
-    setFn((prev) => prev.includes(item) ? prev.filter(x => x !== item) : [...prev, item])
-
-  const apiFilters = {
-    source: selectedSources.length ? selectedSources : undefined,
-    therapeutic_area: selectedAreas.length ? selectedAreas : undefined,
-    status: selectedStatuses.length ? selectedStatuses : undefined,
-    country: selectedCountries.length ? selectedCountries : undefined,
-    has_trial_link: hasTrialOnly || undefined,
-    min_amount: minAmount ? Number(minAmount) : undefined,
-    max_amount: maxAmount ? Number(maxAmount) : undefined,
-    activity_code: selectedActivityCodes.length ? selectedActivityCodes : undefined,
-    org_type: selectedOrgTypes.length ? selectedOrgTypes : undefined,
-    research_type: selectedResearchTypes.length ? selectedResearchTypes : undefined,
-    agency_division: selectedDivisions.length ? selectedDivisions : undefined,
-    fiscal_year_min: fiscalYearMin ? Number(fiscalYearMin) : undefined,
-    fiscal_year_max: fiscalYearMax ? Number(fiscalYearMax) : undefined,
-    ...filters,
-  }
+  // All grant filtering now flows through the inline FilterBar (compiled in
+  // App.jsx into `filters`).
+  const apiFilters = { ...filters }
 
   // Server-side pagination via AG Grid's infinite row model: the grid pulls one
   // page at a time as the user pages through, instead of loading every grant up
@@ -362,12 +329,16 @@ export default function FundingTable({
   // Detach the grid-state listeners on unmount (symmetric with attach above).
   useEffect(() => () => { disposeGridListenersRef.current?.() }, [])
 
-  const SOURCES = ['NIH_REPORTER', 'USASPENDING', 'PCORI', 'CORDIS', 'UKRI', 'AHA', 'ADA']
-  const AREAS = ['Metabolic / GLP-1', 'Diabetes', 'Cardiovascular', 'Adherence / Outcomes', 'Other']
-  const STATUSES = ['ACTIVE', 'COMPLETED']
-  const ORG_TYPES = filterOptions.org_types.length
-    ? filterOptions.org_types
-    : ['ACADEMIC', 'INDUSTRY', 'NONPROFIT', 'GOVERNMENT', 'OTHER']
+  // Dynamic option arrays handed to the inline FilterBar (keys match the
+  // `dynamic` names on FUNDING_FILTER_FIELDS).
+  const dynamicOptions = {
+    org_types: filterOptions.org_types.length
+      ? filterOptions.org_types
+      : ['ACADEMIC', 'INDUSTRY', 'NONPROFIT', 'GOVERNMENT', 'OTHER'],
+    activity_codes: filterOptions.activity_codes || [],
+    research_types: filterOptions.research_types || [],
+    agency_divisions: filterOptions.agency_divisions || [],
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -379,12 +350,6 @@ export default function FundingTable({
         >
           Fields
         </button>
-        <button
-          className={`btn-sm${filterOpen ? ' btn-active' : ''}`}
-          onClick={() => setFilterOpen(v => !v)}
-        >
-          Filter
-        </button>
 
         <FilterBar
           conditions={conditions}
@@ -393,6 +358,7 @@ export default function FundingTable({
           onRemove={onRemoveCondition}
           onClear={onClearConditions}
           filterFields={FUNDING_FILTER_FIELDS}
+          dynamicOptions={dynamicOptions}
         />
 
         <span className="toolbar-sep" />
@@ -417,123 +383,6 @@ export default function FundingTable({
       </div>
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex' }}>
-        {filterOpen && (
-          <div className="filter-sidebar">
-            <div className="filter-sidebar-inner">
-              <div className="filter-group">
-                <div className="filter-label">Source</div>
-                {SOURCES.map((s) => (
-                  <label key={s} className="checkbox-label">
-                    <input type="checkbox" checked={selectedSources.includes(s)} onChange={() => toggle(setSelectedSources)(s)} />
-                    {s.replace(/_/g, ' ')}
-                  </label>
-                ))}
-              </div>
-              <div className="filter-group">
-                <div className="filter-label">Therapeutic Area</div>
-                {AREAS.map((a) => (
-                  <label key={a} className="checkbox-label">
-                    <input type="checkbox" checked={selectedAreas.includes(a)} onChange={() => toggle(setSelectedAreas)(a)} />
-                    {a}
-                  </label>
-                ))}
-              </div>
-              <div className="filter-group">
-                <div className="filter-label">Status</div>
-                {STATUSES.map((s) => (
-                  <label key={s} className="checkbox-label">
-                    <input type="checkbox" checked={selectedStatuses.includes(s)} onChange={() => toggle(setSelectedStatuses)(s)} />
-                    {s}
-                  </label>
-                ))}
-              </div>
-              <div className="filter-group">
-                <div className="filter-label">Org Type</div>
-                {ORG_TYPES.map((t) => (
-                  <label key={t} className="checkbox-label">
-                    <input type="checkbox" checked={selectedOrgTypes.includes(t)} onChange={() => toggle(setSelectedOrgTypes)(t)} />
-                    {t}
-                  </label>
-                ))}
-              </div>
-              {filterOptions.activity_codes.length > 0 && (
-                <div className="filter-group">
-                  <div className="filter-label">Award Type</div>
-                  {filterOptions.activity_codes.map((c) => (
-                    <label key={c} className="checkbox-label">
-                      <input type="checkbox" checked={selectedActivityCodes.includes(c)} onChange={() => toggle(setSelectedActivityCodes)(c)} />
-                      <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{c}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-              {filterOptions.research_types.length > 0 && (
-                <div className="filter-group">
-                  <div className="filter-label">Research Type</div>
-                  {filterOptions.research_types.slice(0, 15).map((r) => (
-                    <label key={r} className="checkbox-label">
-                      <input type="checkbox" checked={selectedResearchTypes.includes(r)} onChange={() => toggle(setSelectedResearchTypes)(r)} />
-                      <span title={r}>{r.length > 35 ? r.slice(0, 35) + '…' : r}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-              {filterOptions.agency_divisions.length > 0 && (
-                <div className="filter-group">
-                  <div className="filter-label">Agency / Division</div>
-                  {filterOptions.agency_divisions.map((d) => (
-                    <label key={d} className="checkbox-label">
-                      <input type="checkbox" checked={selectedDivisions.includes(d)} onChange={() => toggle(setSelectedDivisions)(d)} />
-                      <span title={d}>{d.length > 30 ? d.slice(0, 30) + '…' : d}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-              <div className="filter-group">
-                <div className="filter-label">Fiscal Year</div>
-                <input
-                  className="search-input" type="number" placeholder="From (e.g. 2022)"
-                  value={fiscalYearMin} onChange={(e) => setFiscalYearMin(e.target.value)}
-                  style={{ width: '100%', marginBottom: 4 }}
-                />
-                <input
-                  className="search-input" type="number" placeholder="To (e.g. 2025)"
-                  value={fiscalYearMax} onChange={(e) => setFiscalYearMax(e.target.value)}
-                  style={{ width: '100%' }}
-                />
-              </div>
-              <div className="filter-group">
-                <div className="filter-label">Amount (USD)</div>
-                <input
-                  className="search-input" type="number" placeholder="Min $"
-                  value={minAmount} onChange={(e) => setMinAmount(e.target.value)}
-                  style={{ width: '100%', marginBottom: 4 }}
-                />
-                <input
-                  className="search-input" type="number" placeholder="Max $"
-                  value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)}
-                  style={{ width: '100%' }}
-                />
-              </div>
-              <div className="filter-group">
-                <label className="checkbox-label">
-                  <input type="checkbox" checked={hasTrialOnly} onChange={() => setHasTrialOnly(v => !v)} />
-                  Has trial link only
-                </label>
-              </div>
-              <button className="btn-clear" onClick={() => {
-                setSelectedSources([]); setSelectedAreas([]); setSelectedStatuses([])
-                setSelectedCountries([]); setSelectedActivityCodes([]); setSelectedOrgTypes([])
-                setSelectedResearchTypes([]); setSelectedDivisions([])
-                setHasTrialOnly(false); setMinAmount(''); setMaxAmount('')
-                setFiscalYearMin(''); setFiscalYearMax('')
-              }}>
-                Clear all filters
-              </button>
-            </div>
-          </div>
-        )}
-
         <div className="ag-theme-alpine" style={{ flex: 1, minHeight: 0 }}>
           <AgGridReact
             ref={gridRef}

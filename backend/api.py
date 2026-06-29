@@ -970,6 +970,28 @@ def add_org_contact(org_id: str, body: ContactCreate):
     return row_to_dict(row)
 
 
+@app.post("/orgs/{org_id}/enrich-contacts")
+def enrich_org_contacts_route(org_id: str, force_refresh: bool = False,
+                              x_admin_key: str = Header(default="")):
+    """Enrich an org's contacts with CMO / clinical decision-makers via Seamless.AI
+    (§7). Admin-guarded (it can spend Seamless credits). Served from the credit
+    cache when possible; returns api_calls=0 when no credits were spent. No-ops
+    cleanly when SEAMLESS_API_KEY is unset."""
+    _require_admin(x_admin_key)
+    from seamless import enrich_org_contacts
+    result = enrich_org_contacts(org_id, force_refresh=force_refresh)
+    if not result.get("ok") and result.get("error") == "organization not found":
+        raise HTTPException(status_code=404, detail="Organization not found")
+    # Return the refreshed contact list alongside the enrichment status.
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM org_contacts WHERE org_id = ? ORDER BY is_decision_maker DESC, full_name",
+        (org_id,),
+    ).fetchall()
+    conn.close()
+    return {"status": result, "contacts": [row_to_dict(r) for r in rows]}
+
+
 @app.patch("/orgs/{org_id}")
 def patch_org(org_id: str, body: OrgUpdate):
     conn = get_connection()

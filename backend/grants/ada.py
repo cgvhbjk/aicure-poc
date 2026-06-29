@@ -6,7 +6,7 @@ from datetime import datetime
 import requests
 
 from grant_utils import (
-    is_medical, classify_area, upsert_grant,
+    is_medical, is_human_subjects, classify_area, upsert_grant,
     extract_phase, extract_conditions, extract_interventions,
 )
 from registry_utils import extract_nct
@@ -113,6 +113,7 @@ def pull_ada():
                         "source_url": item.get("URL") or f"https://doi.org/{doi}",
                         "linked_trial_id": nct,
                         "has_trial_link": 1 if nct else 0,
+                        "human_subjects": int(is_human_subjects(combined)),
                     }
                     upsert_grant(record, conn)
                     total_inserted += 1

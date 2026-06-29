@@ -35,8 +35,10 @@ from dateutil.parser import parse as dateparse
 from db import get_connection
 from scoring import (
     _illustrative_trial_score, _illustrative_grant_score,
-    _trial_aicure_fit, _grant_aicure_fit, _fit_blurb,
+    _trial_aicure_fit, _grant_aicure_fit, _fit_blurb, _trial_phase1_graduate,
+    _days_from_now,
 )
+from target_accounts import is_known_customer
 
 PREVIEW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "email_previews")
 
@@ -57,6 +59,7 @@ EVENT_TYPE_DISPLAY = [
     ("site_opening",           "Site Activation"),
     ("recruitment_initiation", "Already Recruiting (likely too late)"),
     ("trial_results",          "Trial Results (too late)"),
+    ("acquisition",            "Acquisition / M&A"),
 ]
 
 # Event types worth emailing as opportunities — strictly pre-enrollment.
@@ -331,12 +334,21 @@ def _trial_summary(t):
     if scale:
         summ += " " + ", ".join(scale).capitalize() + "."
 
-    stage = (t["status"] or "").replace("_", " ").lower()
-    if stage:
-        s2 = stage
-        if t["start_date"]:
-            s2 += f", starts {str(t['start_date'])[:10]}"
-        summ += " " + s2.capitalize() + "."
+    # Timing — phrased so status and dates never contradict each other (the old
+    # version could emit "Completed … starts <date>").
+    grad, _grad_why = _trial_phase1_graduate(t)
+    if grad:
+        comp = str(t["primary_completion"] or t["study_completion"] or "")[:10]
+        summ += f" Phase 1 completed{(' ' + comp) if comp else ''}; Phase 2 likely."
+    else:
+        status_raw = (t["status"] or "").upper()
+        status = status_raw.replace("_", " ").title()
+        sd = str(t["start_date"])[:10] if t["start_date"] else None
+        if status_raw == "NOT_YET_RECRUITING":
+            summ += f" Not yet recruiting{f', starts {sd}' if sd else ''}."
+        elif status:
+            done = status_raw in ("COMPLETED", "TERMINATED", "SUSPENDED", "WITHDRAWN")
+            summ += f" {status}{f', starts {sd}' if (sd and not done) else ''}."
     return summ
 
 
@@ -379,6 +391,35 @@ def _grant_summary(g):
 
 # AiCure fit scoring now lives in scoring.py (shared by the API and tests).
 
+
+def _stats_block(pairs):
+    """A compact 'by the numbers' strip for the digests (§10). pairs = list of
+    (label, value); None/'' values are skipped."""
+    cells = "".join(
+        f'<td style="padding:6px 16px 6px 0;white-space:nowrap;vertical-align:top;">'
+        f'<div style="font-size:18px;font-weight:700;color:#1a4fa0;">{_esc(v)}</div>'
+        f'<div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.03em;">{_esc(l)}</div>'
+        f'</td>'
+        for l, v in pairs if v not in (None, "")
+    )
+    if not cells:
+        return ""
+    return ('<table style="border-collapse:collapse;margin:0 0 16px;background:#f8fafc;'
+            'border:1px solid #eef;border-radius:6px;padding:2px 8px;"><tr>'
+            + cells + '</tr></table>')
+
+
+def _area_counts(rows):
+    """Count rows by therapeutic_area for a digest stats line. Returns a compact
+    'CNS 4 · Neuro 3 · Metabolic 2' string (top areas)."""
+    from collections import Counter
+    c = Counter((r["therapeutic_area"] or "Other") for r in rows)
+    short = {"CNS / Psychiatry": "CNS", "Neurology": "Neuro",
+             "Metabolic / GLP-1": "Metabolic", "Cardiovascular": "CV",
+             "Adherence / Outcomes": "Adherence", "Liver / NASH": "NASH"}
+    return " · ".join(f"{short.get(a, a)} {n}" for a, n in c.most_common(5)) or None
+
+
 # ── digest builders ────────────────────────────────────────────────────────────
 
 def build_news_digest(hours=24, max_items=10, fetch=False, pick_titles=None):
@@ -418,7 +459,31 @@ def build_news_digest(hours=24, max_items=10, fetch=False, pick_titles=None):
         ).fetchall()
     conn.close()
 
+    # Acquisitions are a separate stream (§4) — surfaced regardless of any trial
+    # touchpoint or pre-start timing ("this got bought — why?"). Skipped in the
+    # hand-picked POC path.
+    acq_rows = []
+    if not pick_titles:
+        conn = get_connection()
+        acq_rows = conn.execute(
+            """
+            SELECT source, title, url, published_at, body_snippet, drug_mentioned,
+                   sponsor_mentioned, phase_mentioned, nct_ids_found, event_type
+            FROM news_items
+            WHERE ingested_at >= ? AND event_type = 'acquisition'
+            ORDER BY ingested_at DESC
+            """,
+            (cutoff,),
+        ).fetchall()
+        conn.close()
+
     label_map = dict(EVENT_TYPE_DISPLAY)
+
+    def _hdr(txt):
+        return (f'<h2 style="font-size:14px;margin:18px 0 8px;color:#1a1a1a;'
+                f'border-bottom:1px solid #eee;padding-bottom:4px;">{txt}</h2>')
+
+    # ── Stream (a): tightened trial signals — require a concrete AiCure touchpoint
     candidates = []
     considered = 0
     for r in sorted(rows, key=lambda r: order.get(r["event_type"], 99)):
@@ -426,17 +491,18 @@ def build_news_digest(hours=24, max_items=10, fetch=False, pick_titles=None):
         item = dict(r)
         ft = news_nlp.fetch_article_text(r["url"]) if fetch else None
         a = news_nlp.analyze(item, full_text=ft)
-        # NLP gate: must be AiCure-relevant AND not yet started.
-        if not (a["applies_to_aicure"] and a["not_yet_started"]):
+        # NLP gate: AiCure-relevant AND not yet started AND a CONCRETE touchpoint
+        # (no-touchpoint items are dropped, not shown — §4a).
+        if not (a["applies_to_aicure"] and a["not_yet_started"] and a.get("fit_signals")):
             continue
         candidates.append((r, a))
         if len(candidates) >= max_items:
             break
 
     sections = []
+    if candidates:
+        sections.append(_hdr("Pre-start trial signals"))
     for r, a in candidates:
-        # Only render fields that actually have a value (plus always-present
-        # stage/category/source) — keeps cards full instead of "—" spam.
         fields = [("Signal / stage", label_map.get(r["event_type"], r["event_type"])),
                   ("AiCure category", a["aicure_category"])]
         for label, val in [
@@ -457,11 +523,43 @@ def build_news_digest(hours=24, max_items=10, fetch=False, pick_titles=None):
             fields=fields, tag=a["aicure_category"], blurb=nblurb,
         ))
 
-    intro = (f"{len(candidates)} AiCure-relevant PRE-START signals (of {considered} "
-             f"early-stage items screened). NLP keeps only cardiometabolic/adherence "
-             f"trials that have not yet started; recruiting/results and off-focus "
-             f"(e.g. oncology) items are dropped.")
-    return _shell("AiCure — Daily News Signals", intro, sections), len(candidates)
+    # ── Stream (b): acquisitions / M&A
+    acq_cards = []
+    for r in acq_rows[:max_items]:
+        a = news_nlp.analyze(dict(r),
+                             full_text=news_nlp.fetch_article_text(r["url"]) if fetch else None)
+        fields = []
+        for label, val in [
+            ("Acquirer", a.get("acquirer")),
+            ("Target", a.get("target")),
+            ("Why (rationale)", a.get("rationale")),
+            ("Geography", a.get("geography")),
+        ]:
+            if val:
+                fields.append((label, val))
+        fields.append(("Source", f'{r["source"]} · {r["published_at"]}'))
+        acq_cards.append(_lead_card(
+            r["title"], r["url"], score=None, score_why="",
+            abstract=_clean_excerpt(r["body_snippet"], 220),
+            fields=fields, tag="Acquisition / M&A",
+            blurb="A buyout reshapes a pipeline — assess whether the combined entity "
+                  "now runs adherence-relevant trials AiCure can serve.",
+        ))
+    if acq_cards:
+        sections.append(_hdr("Acquisitions / M&A"))
+        sections.extend(acq_cards)
+
+    stats = _stats_block([
+        ("Trial signals", len(candidates)),
+        ("Acquisitions", len(acq_cards)),
+        ("Screened", considered),
+    ])
+    intro = (f"{len(candidates)} pre-start trial signals with a concrete AiCure "
+             f"touchpoint (of {considered} early-stage items screened) + "
+             f"{len(acq_cards)} acquisitions. Off-focus / no-touchpoint / "
+             f"already-started items are dropped.")
+    return _shell("AiCure — Daily News Signals", intro, [stats] + sections), \
+        len(candidates) + len(acq_cards)
 
 
 def build_weekly_trials_digest(days=7, top_n=10):
@@ -473,50 +571,101 @@ def build_weekly_trials_digest(days=7, top_n=10):
     registered" — first_posted is the authoritative registration date.
     """
     cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    # Phase-1 graduates use the completion date as the "new" signal, not
+    # first_posted — a P1 that completed in the last ~15 months implies a Phase 2
+    # in the 6–12mo target window.
+    grad_cutoff = (datetime.utcnow() - timedelta(days=460)).strftime("%Y-%m-%d")
+    _cols = ("id, title_brief, brief_summary, source_url, sponsor, phase, status, "
+             "therapeutic_area, lead_country, start_date, enrollment, num_sites, "
+             "pi_name, pi_email, registry_sources, interventions, conditions, "
+             "epro_ecoa, digital_biomarkers, dct_elements, cro_named, "
+             "primary_completion, study_completion")
     conn = get_connection()
     trials = conn.execute(
-        """
-        SELECT id, title_brief, brief_summary, source_url, sponsor, phase, status,
-               therapeutic_area, lead_country, start_date, enrollment, num_sites,
-               pi_name, pi_email, registry_sources, interventions, conditions,
-               epro_ecoa, digital_biomarkers, dct_elements
+        f"""
+        SELECT {_cols}
         FROM trials
         WHERE first_posted >= ?
           AND status NOT IN ('COMPLETED','TERMINATED','SUSPENDED','WITHDRAWN',
                              'NO_LONGER_AVAILABLE','APPROVED_FOR_MARKETING')
+          AND (phase IS NULL OR phase NOT LIKE '%PHASE4%')
         ORDER BY first_posted DESC
         LIMIT 3000
         """,
         (cutoff,),
     ).fetchall()
+    # Phase-1 graduates (COMPLETED Phase 1 with a recent completion) — a distinct
+    # lead class the main query excludes (it drops COMPLETED).
+    grads = conn.execute(
+        f"""
+        SELECT {_cols}
+        FROM trials
+        WHERE status = 'COMPLETED' AND phase LIKE '%PHASE1%'
+          AND COALESCE(primary_completion, study_completion, '') >= ?
+        ORDER BY COALESCE(primary_completion, study_completion) DESC
+        LIMIT 1000
+        """,
+        (grad_cutoff,),
+    ).fetchall()
     conn.close()
 
-    scored = sorted(((*_illustrative_trial_score(t), t) for t in trials),
-                    key=lambda x: x[0], reverse=True)[:top_n]
-
-    sections = []
-    for score, why, t in scored:
+    def _card(score, why, t):
         try:
             regs = ", ".join(json.loads(t["registry_sources"] or "[]"))
         except Exception:
             regs = t["registry_sources"] or ""
         _fp, fwhy, _has = _trial_aicure_fit(t)
-        blurb = _fit_blurb(fwhy)
-        # Only fields NOT already stated in the prose summary (which covers
-        # phase, sponsor, enrollment, sites, country, status, start date).
         fields = [
             ("Therapeutic area", t["therapeutic_area"]),
             ("PI", t["pi_name"]),
             ("Email", t["pi_email"]),
             ("Registry", regs or None),
         ]
-        sections.append(_lead_card(
+        return _lead_card(
             t["title_brief"] or t["id"], t["source_url"], score, why,
-            abstract=_trial_summary(t), fields=fields, blurb=blurb,
-        ))
+            abstract=_trial_summary(t), fields=fields, blurb=_fit_blurb(fwhy),
+        )
 
-    intro = f"Top {len(scored)} of newly registered trials this week, ranked by opportunity score (pre-start favored)."
-    return _shell("AiCure — Weekly Registered Trials", intro, sections), len(scored)
+    # Drop score-0 rows: those are the scorer's HARD GATES (Phase 4, patch,
+    # already-started, no touchpoint) — they must be suppressed, not shown.
+    scored = sorted(((*_illustrative_trial_score(t), t) for t in trials),
+                    key=lambda x: x[0], reverse=True)
+    scored = [x for x in scored if x[0] > 0][:top_n]
+    # Only keep graduates the scorer actually rates (>0 — i.e. not gated out).
+    grad_scored = sorted(((*_illustrative_trial_score(t), t) for t in grads),
+                         key=lambda x: x[0], reverse=True)
+    grad_scored = [x for x in grad_scored if x[0] > 0][:max(3, top_n // 2)]
+
+    def _hdr(txt):
+        return (f'<h2 style="font-size:14px;margin:18px 0 8px;color:#1a1a1a;'
+                f'border-bottom:1px solid #eee;padding-bottom:4px;">{txt}</h2>')
+
+    n_window = sum(1 for _s, _w, t in scored
+                   if (_days_from_now(t["start_date"]) or 0) >= 180
+                   and (_days_from_now(t["start_date"]) or 9999) <= 365)
+    n_known = sum(1 for _s, _w, t in scored if is_known_customer(t["sponsor"]))
+    stats = _stats_block([
+        ("New this week", len(trials)),
+        ("Surfaced", len(scored)),
+        ("6–12mo window", n_window),
+        ("Known sponsors", n_known),
+        ("P1 graduates", len(grad_scored)),
+        ("By area", _area_counts([t for _s, _w, t in scored])),
+    ])
+
+    sections = []
+    if scored:
+        sections.append(_hdr("Top newly-registered trials (pre-start)"))
+        sections += [_card(s, w, t) for s, w, t in scored]
+    if grad_scored:
+        sections.append(_hdr("Phase 1 graduates — get in before Phase 2"))
+        sections += [_card(s, w, t) for s, w, t in grad_scored]
+
+    intro = (f"Top {len(scored)} newly registered trials + {len(grad_scored)} Phase 1 "
+             f"graduates this week, ranked by opportunity score (6–12mo pre-start window "
+             f"favored; Phase 4 and already-started trials excluded).")
+    return _shell("AiCure — Weekly Registered Trials", intro, [stats] + sections), \
+        len(scored) + len(grad_scored)
 
 
 def build_weekly_grants_digest(days=7, top_n=10):
@@ -540,7 +689,7 @@ def build_weekly_grants_digest(days=7, top_n=10):
         SELECT id, title, abstract, source_url, organization, sponsor_funder,
                amount_usd, therapeutic_area, conditions, phase_mentioned,
                country, award_date, start_date, end_date, linked_trial_id,
-               pi_name, pi_email, source
+               pi_name, pi_email, source, human_subjects
         FROM grants
         WHERE COALESCE(NULLIF(first_seen, ''), ingested_at) >= ?
           AND (end_date IS NULL OR end_date = '' OR end_date >= ?)
@@ -550,8 +699,10 @@ def build_weekly_grants_digest(days=7, top_n=10):
     ).fetchall()
     conn.close()
 
+    # Drop score-0 rows (hard gates: non-human / basic-science grants).
     scored = sorted(((*_illustrative_grant_score(g), g) for g in grants),
-                    key=lambda x: x[0], reverse=True)[:top_n]
+                    key=lambda x: x[0], reverse=True)
+    scored = [x for x in scored if x[0] > 0][:top_n]
 
     sections = []
     for score, why, g in scored:
@@ -571,8 +722,18 @@ def build_weekly_grants_digest(days=7, top_n=10):
             abstract=_grant_summary(g), fields=fields, blurb=gblurb,
         ))
 
-    intro = f"Top {len(scored)} new grants this week, ranked by opportunity score (early-stage favored)."
-    return _shell("AiCure — Weekly Grants", intro, sections), len(scored)
+    n_human = sum(1 for g in grants if (g["human_subjects"] if g["human_subjects"] is not None else 1))
+    disclosed = sum((g["amount_usd"] or 0) for _s, _w, g in scored)
+    stats = _stats_block([
+        ("New this week", len(grants)),
+        ("Human-subjects", n_human),
+        ("Surfaced", len(scored)),
+        ("Disclosed $ (top)", _money(disclosed) if disclosed else None),
+        ("By area", _area_counts([g for _s, _w, g in scored])),
+    ])
+    intro = (f"Top {len(scored)} new grants this week, ranked by opportunity score "
+             f"(CNS/neuro & adherence favored; animal/preclinical excluded).")
+    return _shell("AiCure — Weekly Grants", intro, [stats] + sections), len(scored)
 
 
 # ── scheduled entry points ─────────────────────────────────────────────────────

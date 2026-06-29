@@ -6,7 +6,7 @@ from datetime import datetime
 import requests
 
 from grant_utils import (
-    is_medical, classify_area, upsert_grant,
+    is_medical, is_human_subjects, classify_area, upsert_grant,
     extract_phase, extract_conditions, extract_interventions,
 )
 from registry_utils import extract_nct
@@ -21,9 +21,13 @@ SEARCH_BODY = {
         "advanced_text_search": {
             "operator": "OR",
             "search_field": "terms",
+            # Indication-driven, CNS/neuro-led (AiCure's real focus), then
+            # cardiometabolic. General indications, not brand drug names.
             "search_text": (
-                "obesity GLP-1 semaglutide tirzepatide diabetes "
-                "cardiac heart failure adherence clinical trial"
+                "schizophrenia depression bipolar PTSD ADHD addiction "
+                "Parkinson Alzheimer epilepsy "
+                "obesity diabetes heart failure "
+                "medication adherence clinical trial"
             ),
         },
         "activity_codes": ["R01", "R44", "R43", "U01", "P01", "R21", "U54"],
@@ -145,6 +149,7 @@ def pull_nih_reporter():
                     "phase_mentioned": extract_phase(combined),
                     "linked_trial_id": nct,
                     "has_trial_link": 1 if nct else 0,
+                    "human_subjects": int(is_human_subjects(combined)),
                 }
                 upsert_grant(record, conn)
                 total_inserted += 1

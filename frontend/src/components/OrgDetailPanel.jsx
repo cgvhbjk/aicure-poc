@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { getOrgTrials, getOrgContacts, addOrgContact, patchOrg } from '../api'
+import { getOrgTrials, getOrgContacts, addOrgContact, enrichOrgContacts, patchOrg } from '../api'
 import { safeHref } from '../utils/url'
 
 const ORG_TYPE_OPTIONS = ['PHARMA', 'BIOTECH', 'CRO', 'DCT_VENDOR', 'DIGITAL_HEALTH', 'RPM', 'TELEHEALTH', 'ACADEMIC', 'GOVERNMENT', 'OTHER']
@@ -127,6 +127,8 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
   const [showContactForm, setShowContactForm] = useState(false)
   const [contactDraft, setContactDraft] = useState(EMPTY_CONTACT)
   const [savingContact, setSavingContact] = useState(false)
+  const [enriching, setEnriching] = useState(false)
+  const [enrichMsg, setEnrichMsg] = useState(null)
 
   useEffect(() => {
     if (!org?.id) return
@@ -143,6 +145,26 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
       console.error('Patch failed', e)
     }
   }, [org?.id, onOrgUpdated])
+
+  const handleEnrich = async () => {
+    setEnriching(true)
+    setEnrichMsg(null)
+    try {
+      const res = await enrichOrgContacts(org.id)
+      if (Array.isArray(res.data?.contacts)) setContacts(res.data.contacts)
+      const st = res.data?.status || {}
+      if (st.ok) {
+        const calls = st.api_calls ?? 0
+        setEnrichMsg(`${st.source}: +${st.inserted ?? 0} added · ${calls} API call${calls === 1 ? '' : 's'}`)
+      } else {
+        setEnrichMsg(st.error || 'Enrichment unavailable')
+      }
+    } catch (e) {
+      setEnrichMsg(e?.response?.data?.detail || 'Enrichment failed (admin key required)')
+    } finally {
+      setEnriching(false)
+    }
+  }
 
   const handleAddContact = async () => {
     if (!contactDraft.full_name.trim()) return
@@ -276,14 +298,28 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
           <div style={{ marginBottom: 20 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
               <div className="detail-section-title" style={{ margin: 0 }}>Contacts</div>
-              <button
-                className="btn-sm"
-                onClick={() => setShowContactForm((v) => !v)}
-                style={{ fontSize: 11 }}
-              >
-                {showContactForm ? 'Cancel' : '+ Add contact'}
-              </button>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button
+                  className="btn-sm"
+                  onClick={handleEnrich}
+                  disabled={enriching}
+                  style={{ fontSize: 11 }}
+                  title="Find CMO / clinical decision-makers via Seamless.AI (cached to avoid re-spending credits)"
+                >
+                  {enriching ? 'Enriching…' : 'Enrich (Seamless)'}
+                </button>
+                <button
+                  className="btn-sm"
+                  onClick={() => setShowContactForm((v) => !v)}
+                  style={{ fontSize: 11 }}
+                >
+                  {showContactForm ? 'Cancel' : '+ Add contact'}
+                </button>
+              </div>
             </div>
+            {enrichMsg && (
+              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>{enrichMsg}</div>
+            )}
 
             {showContactForm && (
               <div style={{

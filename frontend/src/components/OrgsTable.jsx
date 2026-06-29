@@ -21,10 +21,12 @@ const ORG_TYPE_STYLES = {
   OTHER:          { background: '#f1f5f9', color: '#475569' },
 }
 
+const ORG_TYPE_LABELS = { ACADEMIC: 'University / Academic' }
+
 function OrgTypeBadge({ value }) {
   if (!value) return null
   const style = ORG_TYPE_STYLES[value] || ORG_TYPE_STYLES.OTHER
-  return <span className="badge" style={style}>{value.replace(/_/g, ' ')}</span>
+  return <span className="badge" style={style}>{ORG_TYPE_LABELS[value] || value.replace(/_/g, ' ')}</span>
 }
 
 function LinkCell({ value }) {

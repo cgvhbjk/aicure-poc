@@ -1,4 +1,3 @@
-import feedparser
 import html
 import json
 import re
@@ -24,28 +23,34 @@ RSS_FEEDS = [
     {"source": "BioPharma Dive", "url": "https://www.biopharmadive.com/feeds/news/"},
     {"source": "STAT News",      "url": "https://www.statnews.com/feed/"},
     {"source": "BioSpace",       "url": "https://www.biospace.com/rss/news/", "require_relevance": True},
-    # Google News keyword searches — aggregates dozens of pharma sources, free, no API key
-    {"source": "Google News — GLP-1",          "url": _GN + "GLP-1+clinical+trial"},
-    {"source": "Google News — Semaglutide",    "url": _GN + "semaglutide+clinical+trial"},
-    {"source": "Google News — Tirzepatide",    "url": _GN + "tirzepatide+clinical+trial"},
-    {"source": "Google News — Obesity trial",  "url": _GN + "obesity+phase+2+OR+phase+3+trial"},
-    {"source": "Google News — Weight loss",    "url": _GN + "weight+loss+drug+clinical+trial"},
-    {"source": "Google News — T2D trial",      "url": _GN + "type+2+diabetes+clinical+trial+phase"},
-    {"source": "Google News — Heart failure",  "url": _GN + "heart+failure+clinical+trial+phase"},
-    {"source": "Google News — A-fib trial",    "url": _GN + "atrial+fibrillation+clinical+trial"},
+    # Google News keyword searches — aggregates dozens of pharma sources, free, no
+    # API key. Led by CNS / psychiatry & neurology (AiCure's real focus), then a
+    # secondary cardiometabolic net, plus stage-signal and M&A queries. Indication-
+    # driven and general (no brand names) so the net isn't narrowed to GLP-1.
+    # ── CNS / psychiatry (primary) ──
+    {"source": "Google News — Schizophrenia",  "url": _GN + "schizophrenia+clinical+trial+phase"},
+    {"source": "Google News — Depression",     "url": _GN + "major+depressive+disorder+clinical+trial+phase"},
+    {"source": "Google News — PTSD",           "url": _GN + "PTSD+clinical+trial+phase"},
+    {"source": "Google News — Bipolar",        "url": _GN + "bipolar+disorder+clinical+trial+phase"},
+    {"source": "Google News — ADHD",           "url": _GN + "ADHD+clinical+trial+phase"},
+    {"source": "Google News — Addiction",      "url": _GN + "substance+use+OR+addiction+clinical+trial+phase"},
+    # ── Neurology (primary) ──
+    {"source": "Google News — Parkinson",      "url": _GN + "Parkinson+disease+clinical+trial+phase"},
+    {"source": "Google News — Alzheimer",      "url": _GN + "Alzheimer+disease+clinical+trial+phase"},
+    {"source": "Google News — ALS",            "url": _GN + "amyotrophic+lateral+sclerosis+clinical+trial"},
+    {"source": "Google News — Epilepsy",       "url": _GN + "epilepsy+clinical+trial+phase"},
+    {"source": "Google News — CNS initiated",  "url": _GN + "CNS+OR+psychiatric+trial+initiated+OR+planned+OR+launches"},
+    # ── Cross-cutting stage / signal queries ──
     {"source": "Google News — First patient",  "url": _GN + "first+patient+enrolled+OR+dosed+pharma+trial"},
     {"source": "Google News — IND filing",     "url": _GN + "IND+filed+OR+IND+cleared+clinical+trial"},
-    # Broader net — more on-focus, early-stage cardiometabolic queries
-    {"source": "Google News — Obesity initiated",  "url": _GN + "obesity+trial+initiated+OR+planned+OR+launches"},
-    {"source": "Google News — Oral GLP-1",         "url": _GN + "oral+GLP-1+OR+orforglipron+OR+oral+semaglutide+trial"},
-    {"source": "Google News — Diabetes DCT",       "url": _GN + "diabetes+decentralized+OR+remote+clinical+trial"},
-    {"source": "Google News — Adherence trial",    "url": _GN + "medication+adherence+clinical+trial"},
-    {"source": "Google News — CV outcomes",        "url": _GN + "cardiovascular+outcomes+trial+enrolling+OR+initiated"},
-    {"source": "Google News — NASH trial",         "url": _GN + "NASH+OR+MASH+phase+2+OR+phase+3+trial"},
-    {"source": "Google News — Heart failure new",  "url": _GN + "heart+failure+trial+initiated+OR+enrolling+OR+planned"},
-    {"source": "Google News — Weight protocol",    "url": _GN + "weight+loss+trial+protocol+OR+study+design"},
-    {"source": "Google News — Obesity sponsor",    "url": _GN + "Novo+Nordisk+OR+Eli+Lilly+obesity+trial+phase"},
-    {"source": "Google News — Tirzepatide CV",     "url": _GN + "tirzepatide+OR+retatrutide+cardiovascular+OR+heart+trial"},
+    {"source": "Google News — Adherence trial","url": _GN + "medication+adherence+clinical+trial"},
+    {"source": "Google News — DCT",            "url": _GN + "decentralized+OR+remote+clinical+trial+initiated"},
+    # ── M&A / buyouts (incl. private companies — see §4 acquisition stream) ──
+    {"source": "Google News — Biotech M&A",    "url": _GN + "biotech+OR+pharma+acquires+OR+acquisition+OR+buyout"},
+    # ── Cardiometabolic (secondary) ──
+    {"source": "Google News — Obesity trial",  "url": _GN + "obesity+OR+GLP-1+trial+phase+2+OR+phase+3"},
+    {"source": "Google News — T2D trial",      "url": _GN + "type+2+diabetes+clinical+trial+phase"},
+    {"source": "Google News — Heart failure",  "url": _GN + "heart+failure+clinical+trial+phase"},
 ]
 
 NCT_PATTERN = re.compile(r"NCT\d{8}")
@@ -199,8 +204,19 @@ VENDOR_SIGNAL_KEYWORDS = [
     "decentralized trial platform", "dct platform", "evaluating vendors",
 ]
 
+# Mergers & acquisitions, incl. private-company buyouts. Surfaced as their own
+# stream ("this got bought — why?") regardless of any trial touchpoint (§4). Highest
+# event-type precedence so a buyout headline isn't mislabeled as a trial signal.
+ACQUISITION_KEYWORDS = [
+    "acquires", "to acquire", "acquisition of", "acquired by", "completes acquisition",
+    "definitive agreement to acquire", "agreement to acquire", "buys", "buyout",
+    "takeover", "to be acquired", "merger", "merges with", "to merge",
+    "agreed to acquire", "snaps up", "purchases", "to buy",
+]
+
 # Broad pharma terms used to filter out off-topic noise (applied per-source via require_relevance)
 _RELEVANCE_TERMS = [
+    "acquire", "acquisition", "buyout", "merger", "takeover",
     "clinical trial", "phase 1", "phase 2", "phase 3", "phase i", "phase ii", "phase iii",
     "fda", "ema", "nda", "bla", "ind ", "anda", "approval",
     "drug", "therapy", "therapeutics", "pharmaceutical", "pharma",
@@ -227,6 +243,7 @@ def _is_relevant(text):
 # Precedence: when an item matches multiple types, the earliest wins.
 # Ordered strongest/nearest-term first; results & noise handled separately.
 EVENT_TYPE_PRIORITY = [
+    ("acquisition",            ACQUISITION_KEYWORDS),
     ("recruitment_initiation", RECRUITMENT_INITIATION_KEYWORDS),
     ("study_startup",          STUDY_STARTUP_KEYWORDS),
     ("site_opening",           SITE_OPENING_KEYWORDS),
@@ -273,7 +290,8 @@ def parse_feed(feed_info):
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     safe_source = re.sub(r"[^a-zA-Z0-9]", "_", source)
 
-    try:
+    import feedparser  # lazy import — keeps the module importable (and testable)
+    try:                # even where feedparser/sgmllib3k isn't installed.
         feed = feedparser.parse(url)
     except Exception as e:
         print(f"  [ERROR] feedparser failed for '{source}': {e}")

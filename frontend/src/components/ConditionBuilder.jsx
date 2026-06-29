@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { FILTER_FIELDS, OPERATORS_FOR_TYPE, makeCondition } from '../utils/conditions'
 
-export default function ConditionBuilder({ initialCondition, onApply, onCancel, therapeuticAreas, countries, filterFields = FILTER_FIELDS }) {
+export default function ConditionBuilder({ initialCondition, onApply, onCancel, therapeuticAreas, countries, filterFields = FILTER_FIELDS, dynamicOptions = {} }) {
   const firstField = filterFields[0]
   const [fieldKey, setFieldKey] = useState(initialCondition?.field ?? firstField.key)
   const [operator, setOperator] = useState(initialCondition?.operator ?? '')
@@ -31,7 +31,11 @@ export default function ConditionBuilder({ initialCondition, onApply, onCancel, 
   }, [onCancel])
 
   const dynamicSource =
-    fieldDef.dynamic === 'countries' ? (countries ?? [])
+    // Caller-supplied option arrays (e.g. grants org_types / activity_codes from
+    // /grants/filter-options) take priority, keyed by the field's `dynamic` name.
+    (typeof fieldDef.dynamic === 'string' && Array.isArray(dynamicOptions[fieldDef.dynamic]))
+      ? dynamicOptions[fieldDef.dynamic]
+    : fieldDef.dynamic === 'countries' ? (countries ?? [])
     : fieldDef.dynamic === 'therapeutic_areas' ? (therapeuticAreas ?? [])
     : fieldDef.dynamic === true ? (therapeuticAreas ?? [])  // legacy
     : null

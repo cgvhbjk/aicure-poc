@@ -11,24 +11,78 @@ GBP_TO_USD = 1.27
 EUR_TO_USD = 1.08
 
 MEDICAL_KEYWORDS = [
-    "obesity", "GLP-1", "semaglutide", "tirzepatide", "liraglutide",
-    "diabetes", "type 2 diabetes", "weight loss", "cardiac", "heart failure",
-    "atrial fibrillation", "dulaglutide", "metabolic", "bariatric",
-    "cardiometabolic", "endocrinology", "adherence", "clinical trial",
-    "randomized", "placebo", "phase 1", "phase 2", "phase 3",
-    "cardiovascular", "hypertension", "insulin", "glucose", "NASH",
-    "blood pressure", "coronary", "stroke", "kidney", "renal",
+    # CNS / psychiatry & neurology (AiCure's primary focus — must be present here or
+    # is_medical() would filter these grants out before they reach the pipeline)
+    "schizophrenia", "psychosis", "depression", "major depressive", "ptsd",
+    "post-traumatic", "bipolar", "adhd", "attention deficit", "anxiety",
+    "addiction", "substance use", "alcohol", "opioid", "smoking cessation",
+    "borderline personality", "tardive dyskinesia", "parkinson", "alzheimer",
+    "dementia", "huntington", "amyotrophic", "multiple sclerosis", "epilepsy",
+    "seizure", "essential tremor", "neurology", "psychiatric", "cns",
+    # cardiometabolic (secondary)
+    "obesity", "GLP-1", "diabetes", "type 2 diabetes", "weight loss", "cardiac",
+    "heart failure", "atrial fibrillation", "metabolic", "bariatric",
+    "cardiometabolic", "endocrinology", "cardiovascular", "hypertension",
+    "insulin", "glucose", "NASH", "blood pressure", "coronary", "stroke",
+    "kidney", "renal",
+    # cross-cutting
+    "adherence", "clinical trial", "randomized", "placebo",
+    "phase 1", "phase 2", "phase 3",
 ]
 
 PHASE_PATTERN = re.compile(r'\bphase\s*(1|2|3|4|I{1,3}V?)\b', re.IGNORECASE)
 
 CONDITION_KEYWORDS = [
+    # CNS / psychiatry & neurology (primary)
+    "schizophrenia", "major depressive disorder", "depression", "PTSD",
+    "bipolar disorder", "ADHD", "anxiety", "substance use disorder",
+    "alcohol use disorder", "opioid use disorder", "smoking cessation",
+    "tardive dyskinesia", "Parkinson's disease", "Alzheimer's disease", "dementia",
+    "Huntington's disease", "amyotrophic lateral sclerosis", "multiple sclerosis",
+    "epilepsy", "essential tremor",
+    # cardiometabolic (secondary)
     "obesity", "overweight", "type 2 diabetes", "T2D", "heart failure",
     "atrial fibrillation", "cardiovascular", "hypertension", "dyslipidemia",
     "metabolic syndrome", "bariatric", "weight loss", "cardiometabolic",
     "non-alcoholic fatty liver", "NAFLD", "NASH", "chronic kidney disease",
     "medication adherence", "treatment adherence",
 ]
+
+
+# ── Human-subjects gate (§3a) ─────────────────────────────────────────────────
+# Many research grants (esp. NIH RePORTER R01s) fund preclinical / animal /
+# in-vitro work that AiCure's adherence platform can never serve. Exclude grants
+# whose abstract is dominated by animal/basic-science cues with no human-subjects
+# signal. Conservative: a grant with ANY explicit human cue is kept.
+_ANIMAL_CUES = [
+    "mouse", "mice", "murine", " rat ", " rats ", "rodent", "zebrafish",
+    "drosophila", "in vitro", "in-vitro", "preclinical", "pre-clinical",
+    "animal model", "animal models", "cell line", "cell lines", "xenograft",
+    "knockout", "transgenic", "c. elegans", "non-human primate",
+]
+_HUMAN_CUES = [
+    "patient", "participant", "human subject", "clinical trial", "adults",
+    "volunteers", "in humans", "human participants", "enrolled", "randomized",
+    "phase 1", "phase 2", "phase 3", "phase i", "phase ii", "phase iii",
+]
+
+
+def is_human_subjects(text: str) -> bool:
+    """True unless the text is clearly preclinical/animal with no human cue.
+
+    Returns True for empty/unknown text (don't drop on missing data) and for any
+    text carrying an explicit human-subjects cue. Returns False only when animal /
+    basic-science cues are present AND no human cue is — i.e. a confidently
+    non-human grant.
+    """
+    if not text:
+        return True
+    t = text.lower()
+    has_human = any(c in t for c in _HUMAN_CUES)
+    if has_human:
+        return True
+    has_animal = any(c in t for c in _ANIMAL_CUES)
+    return not has_animal
 
 
 def is_medical(text: str) -> bool:
@@ -82,7 +136,7 @@ _GRANT_COLUMNS = frozenset({
     "linked_trial_id", "country", "source_url", "raw_snapshot_path",
     "ingested_at", "has_trial_link", "aicure_fit", "activity_code",
     "agency_division", "fiscal_year", "project_acronym", "research_type",
-    "first_seen",
+    "first_seen", "human_subjects",
 })
 
 

@@ -54,11 +54,14 @@ def _cache_put(key, value):
         print(f"[news_nlp] cache write failed ({_CACHE_PATH}): {e}")
 
 # ── AiCure-relevant trial categories ─────────────────────────────────────────
-# What "applies to AiCure" means: a cardiometabolic / GLP-1-adjacent indication
-# AND/OR a trial design AiCure's platform serves (decentralized, ePRO/eCOA,
-# digital biomarkers, medication adherence). The NLP classifies into one of
-# these and flags off-focus items so they can be dropped or de-ranked.
+# What "applies to AiCure" means: a CNS / psychiatry / neurology indication (the
+# real won-deal focus) or a cardiometabolic one, AND/OR a trial design AiCure's
+# platform serves (decentralized, ePRO/eCOA, digital biomarkers, medication
+# adherence). The NLP classifies into one of these and flags off-focus items so
+# they can be dropped or de-ranked.
 AICURE_CATEGORIES = [
+    "CNS / Psychiatry",
+    "Neurology",
     "Obesity / Weight Management",
     "Type 2 Diabetes",
     "Cardiovascular",
@@ -69,6 +72,8 @@ AICURE_CATEGORIES = [
 ]
 # Map of our coarse area buckets → display category
 _AREA_TO_CATEGORY = {
+    "CNS / Psychiatry": "CNS / Psychiatry",
+    "Neurology": "Neurology",
     "Metabolic / GLP-1": "Obesity / Weight Management",
     "Diabetes": "Type 2 Diabetes",
     "Cardiovascular": "Cardiovascular",
@@ -232,12 +237,71 @@ def analyze(item, use_llm=None, full_text=None):
     return res
 
 
+# ── acquisition ("this got bought — why?") extraction (§4) ────────────────────
+_ACQ_PATTERNS = [
+    re.compile(r'([A-Z][\w.&\-]*(?:\s+[A-Z][\w.&\-]*){0,4})\s+(?:to\s+)?acquires?\s+'
+               r'([A-Z][\w.&\-]*(?:\s+[A-Z][\w.&\-]*){0,4})', re.I),
+    re.compile(r'([A-Z][\w.&\-]*(?:\s+[A-Z][\w.&\-]*){0,4})\s+(?:to\s+)?(?:buys|snaps up|'
+               r'agreed to acquire|completes acquisition of)\s+'
+               r'([A-Z][\w.&\-]*(?:\s+[A-Z][\w.&\-]*){0,4})', re.I),
+]
+# "<target> acquired by <acquirer>" — operands reversed.
+_ACQ_BY_PATTERN = re.compile(
+    r'([A-Z][\w.&\-]*(?:\s+[A-Z][\w.&\-]*){0,4})\s+acquired by\s+'
+    r'([A-Z][\w.&\-]*(?:\s+[A-Z][\w.&\-]*){0,4})', re.I)
+_RATIONALE_CUES = ("to expand", "to bolster", "to strengthen", "to gain", "to add",
+                   "pipeline", "to acquire rights", "to broaden", "to enter",
+                   "bolstering", "expanding", "strengthening")
+
+
+def _extract_acquisition(text):
+    """Best-effort (acquirer, target, rationale) for an acquisition headline."""
+    acquirer = target = None
+    m = _ACQ_BY_PATTERN.search(text)
+    if m:
+        target, acquirer = m.group(1).strip(), m.group(2).strip()
+    else:
+        for pat in _ACQ_PATTERNS:
+            m = pat.search(text)
+            if m:
+                acquirer, target = m.group(1).strip(), m.group(2).strip()
+                break
+    rationale = None
+    for sent in re.split(r'(?<=[.!?])\s+', text):
+        if any(c in sent.lower() for c in _RATIONALE_CUES):
+            rationale = sent.strip()[:240]
+            break
+    return acquirer, target, rationale
+
+
 def _analyze_rules(item, full_text=None):
     title = item.get("title") or ""
     body = item.get("body_snippet") or ""
     # Prefer full article text when available — the RSS snippet is too thin to
     # extract size/geography/sponsor reliably.
     text = f"{title} {full_text or body}"
+
+    et = item.get("event_type") or ""
+    # Acquisitions are a lead in their own right ("why was this bought") — they
+    # apply regardless of any trial touchpoint or pre-start timing.
+    if et == "acquisition":
+        acquirer, target, rationale = _extract_acquisition(text)
+        return {
+            "applies_to_aicure": True,
+            "aicure_category": "Acquisition / M&A",
+            "indication": None,
+            "est_size": None,
+            "geography": _extract_geo(text),
+            "sponsor_org": acquirer or _extract_org(text, item.get("sponsor_mentioned")),
+            "signal_phrase": _signal_phrase(text, et),
+            "fit_signals": [],
+            "not_yet_started": True,
+            "fit_reason": "M&A — assess why the target was bought",
+            "acquirer": acquirer,
+            "target": target,
+            "rationale": rationale,
+            "method": "rules",
+        }
 
     area = classify_area(text)
     category = _AREA_TO_CATEGORY.get(area)
@@ -285,6 +349,7 @@ def _signal_phrase(text, event_type):
     except Exception:
         return None
     kw_map = {
+        "acquisition": rp.ACQUISITION_KEYWORDS,
         "protocol_planning": rp.PROTOCOL_PLANNING_KEYWORDS,
         "funding_awarded": rp.FUNDING_AWARDED_KEYWORDS,
         "vendor_signal": rp.VENDOR_SIGNAL_KEYWORDS,
@@ -317,15 +382,21 @@ _LLM_SYSTEM = (
     "You analyze pharma / clinical-trial news for AiCure, which sells software for "
     "medication adherence (visual pill-ingestion / dose confirmation), remote weight "
     "& vitals verification, ePRO/eCOA, digital biomarkers, and decentralized trials. "
-    "AiCure cares about cardiometabolic trials (obesity/GLP-1, type 2 diabetes, "
-    "cardiovascular, NASH, renal) and medication adherence.\n\n"
+    "AiCure's PRIMARY focus is CNS / psychiatry & neurology trials (schizophrenia, "
+    "depression/MDD, PTSD, bipolar, ADHD, addiction, Parkinson's, Alzheimer's, ALS, "
+    "MS, epilepsy) — adherence-fragile, self-administered populations. It ALSO cares "
+    "about cardiometabolic trials (obesity/GLP-1, type 2 diabetes, cardiovascular, "
+    "NASH, renal) and medication adherence. Oncology is OFF-focus (those patients "
+    "adhere reliably).\n\n"
     "CRITICAL TIMING: AiCure must engage with a trial BEFORE it starts enrolling — "
     "during planning, funding, vendor selection, or registration. An article about a "
     "trial that is already recruiting, has dosed its first patient, or is reporting "
     "results means the window has closed → not_yet_started = false.\n\n"
-    "Set applies_to_aicure = true only if the trial is cardiometabolic/adherence AND "
-    "AiCure's product could plausibly touch it (self-administered drug, weight/vitals "
-    "endpoint, ePRO, digital biomarkers, or decentralized design). fit_signals must be "
+    "Set applies_to_aicure = true only if the trial is CNS/neuro or "
+    "cardiometabolic/adherence AND AiCure's product could plausibly touch it "
+    "(self-administered drug, weight/vitals endpoint, ePRO, digital biomarkers, or "
+    "decentralized design). A transdermal patch is NOT a pill-ingestion touchpoint. "
+    "fit_signals must be "
     "a subset of the allowed values; choose only those clearly supported by the text. "
     "Leave est_size / geography / sponsor_org null when the text does not state them — "
     "do not guess. aicure_category must be one of the allowed categories or 'Off-focus'."

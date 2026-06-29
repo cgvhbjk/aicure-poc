@@ -6,16 +6,35 @@ the NLP layer (news_nlp) all need. These previously kept near-duplicate copies
 of `_flag`, `DRUG_KEYWORDS`, and the therapeutic-area classifier that had quietly
 drifted apart (e.g. the trial classifier lacked the oncology guard the grant one
 had, and DRUG_KEYWORDS was missing the SGLT2/DPP-4 drugs on the news side).
+
+TARGETING NOTE: AiCure's actual won-deal book is overwhelmingly CNS / psychiatry
+/ neurology (schizophrenia, depression/MDD, PTSD, bipolar, ADHD, addiction,
+Parkinson's, Alzheimer's, ALS, MS, tardive dyskinesia, …) — adherence-fragile,
+self-administered populations. Cardiometabolic (obesity/GLP-1, diabetes, CV, NASH)
+is a real but secondary slice. The classifier therefore leads with the CNS /
+Psychiatry and Neurology buckets, then cardiometabolic, with oncology kept
+off-focus (those patients adhere, so there's no AiCure pill-adherence angle).
 """
 
-# Cardiometabolic drug names AiCure cares about. Substring-matched. This is the
-# union of the two prior lists (grant_utils had the SGLT2/DPP-4 entries the news
-# parser lacked). Detection is additive, so widening it only finds more drugs.
+# Drug names / classes AiCure cares about. Substring-matched. Detection is kept
+# broad on purpose (matching brand names only ever finds MORE rows); the pullers'
+# *search queries*, by contrast, are deliberately general (indications / classes,
+# not brand names) — see ct_puller / rss_parser / grants/*.
+#
+# Cardiometabolic drugs (the original list) + CNS/psychiatric drug classes that
+# dominate the won book. General classes (antipsychotic / antidepressant / …) plus
+# a few high-frequency molecules seen across won CNS trials.
 DRUG_KEYWORDS = [
+    # cardiometabolic
     "semaglutide", "tirzepatide", "liraglutide", "dulaglutide", "ozempic",
     "wegovy", "mounjaro", "victoza", "saxenda", "rybelsus", "jardiance",
     "farxiga", "trulicity", "metformin", "insulin", "glp-1", "sglt2",
     "dpp-4", "sitagliptin", "empagliflozin", "dapagliflozin",
+    # CNS / psychiatric drug classes (general — the primary focus)
+    "antipsychotic", "antidepressant", "ssri", "snri", "antiepileptic",
+    "anticonvulsant", "benzodiazepine", "stimulant", "mood stabilizer",
+    "muscarinic", "psychedelic", "ketamine", "esketamine", "brexpiprazole",
+    "cariprazine", "lumateperone", "zuranolone", "vmat2",
 ]
 
 
@@ -29,15 +48,37 @@ def flag(text, keywords) -> bool:
     return any(k.lower() in t for k in keywords)
 
 
-# Therapeutic-area classifier. One ladder used for trials, grants, and news so
-# the same text always lands in the same bucket regardless of ingestion path.
-_ONCOLOGY_CUES = ["cancer", "tumor", "tumour", "oncolog", "carcinoma", "neoplas",
-                  "melanoma", "lymphoma", "leukemia", "leukaemia", "metasta", "glioma"]
+# ── Therapeutic-area classifier ───────────────────────────────────────────────
+# One ladder used for trials, grants, and news so the same text always lands in
+# the same bucket regardless of ingestion path. CNS / Psychiatry and Neurology
+# are checked FIRST (primary focus), then cardiometabolic (secondary). Oncology is
+# guarded out to "Other".
+ONCOLOGY_CUES = ["cancer", "tumor", "tumour", "oncolog", "carcinoma", "neoplas",
+                 "melanoma", "lymphoma", "leukemia", "leukaemia", "metasta", "glioma"]
+
+# Psychiatric / behavioral-health cues (the single largest won-deal cluster).
+CNS_PSYCH_CUES = [
+    "schizophren", "psychosis", "psychotic", "depress", "mdd",
+    "major depressive", "treatment-resistant", "treatment resistant",
+    "ptsd", "post-traumatic", "post traumatic", "bipolar", "manic episode",
+    "adhd", "attention deficit", "attention-deficit", "anxiety",
+    "social anxiety", "ocd", "obsessive-compulsive", "addiction", "substance use",
+    "substance-use", "alcohol use", "alcohol dependence", "opioid use",
+    "smoking cessation", "nicotine", "borderline personality", "insomnia",
+    "agitation", "tardive dyskinesia", "neuropsychiatr",
+]
+# Neurology cues (the second-largest won cluster — degenerative / movement / CNS).
+NEURO_CUES = [
+    "parkinson", "alzheimer", "dementia", "mild cognitive", "cognitive impairment",
+    "huntington", "amyotrophic", "lou gehrig", "multiple sclerosis", "epilepsy",
+    "seizure", "essential tremor", "neuropath", "migraine", "myasthenia",
+    "spinal muscular", "ataxia",
+]
+
+# Strong cardiometabolic anchors — used by the oncology guard so a "cancer
+# metabolism" record doesn't leak into the metabolic bucket.
 _STRONG_CM = ["semaglutide", "tirzepatide", "liraglutide", "dulaglutide", "glp-1",
               "obesity", "obese", "diabet", "heart failure", "atrial fib"]
-# "metaboli" subsumes "metabolic syndrome"/"cardiometabolic"/"metabolism";
-# "weight" subsumes "weight loss"/"weight management". This is the broader of the
-# two prior cue sets, so no row that classified as Metabolic before stops doing so.
 _METABOLIC_CUES = ["obes", "glp", "weight", "semaglutide", "tirzepatide",
                    "liraglutide", "dulaglutide", "bariatric", "metaboli"]
 
@@ -47,8 +88,14 @@ def classify_area(text: str) -> str:
     # Oncology guard: cancer-metabolism / tumor records were leaking into
     # "Metabolic / GLP-1" via loose substrings (e.g. "metabolic"). If the text is
     # clearly oncology and has no strong cardiometabolic anchor, it's off-focus.
-    if any(k in t for k in _ONCOLOGY_CUES) and not any(k in t for k in _STRONG_CM):
+    if any(k in t for k in ONCOLOGY_CUES) and not any(k in t for k in _STRONG_CM):
         return "Other"
+    # PRIMARY focus — CNS / psychiatry then neurology.
+    if any(k in t for k in CNS_PSYCH_CUES):
+        return "CNS / Psychiatry"
+    if any(k in t for k in NEURO_CUES):
+        return "Neurology"
+    # SECONDARY focus — cardiometabolic ladder.
     if any(k in t for k in _METABOLIC_CUES):
         return "Metabolic / GLP-1"
     if "diabet" in t or "insulin" in t or "glycem" in t or "glycaem" in t:

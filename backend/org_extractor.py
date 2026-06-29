@@ -183,18 +183,46 @@ def resolve_alias(name: str) -> str:
     return name.strip()
 
 
-def _classify_org_type(sponsor_type: str) -> str:
-    if not sponsor_type:
-        return "OTHER"
-    st = sponsor_type.upper()
+# Large established pharma — used to split INDUSTRY sponsors into PHARMA vs BIOTECH
+# (the ClinicalTrials.gov `class` field only says INDUSTRY). Lowercased canonical
+# names (as produced by resolve_alias).
+_BIG_PHARMA = {
+    "novo nordisk", "eli lilly", "astrazeneca", "pfizer", "merck", "sanofi", "roche",
+    "johnson & johnson", "abbvie", "amgen", "boehringer ingelheim",
+    "bristol myers squibb", "novartis", "gsk", "bayer", "takeda", "daiichi sankyo",
+    "servier", "otsuka", "astellas", "eisai", "teva", "viatris", "sun pharmaceutical",
+    "gilead sciences", "biogen", "moderna", "regeneron", "vertex pharmaceuticals",
+    "allergan", "alkermes", "supernus pharmaceuticals", "jazz pharmaceuticals",
+}
+# Name cues that indicate a (smaller) biotech.
+_BIOTECH_CUES = ("therapeutic", "biosciences", "bioscience", "biopharma", "biologics",
+                 "biotech", " bio ", "bio,", "genomics", "pharmaceuticals")
+
+
+def _classify_org_type(sponsor_type: str, canonical_name: str = "") -> str:
+    """Classify an org. INDUSTRY is split into PHARMA (big established pharma) vs
+    BIOTECH (everyone else industry), which the UI already styles/filters but the
+    feed's `class` field never distinguishes."""
+    st = (sponsor_type or "").upper()
+    name = (canonical_name or "").lower()
     if "INDUSTRY" in st:
-        return "PHARMA"
+        if name in _BIG_PHARMA:
+            return "PHARMA"
+        if any(cue in name for cue in _BIOTECH_CUES):
+            return "BIOTECH"
+        # Default: an industry sponsor that isn't big pharma is treated as biotech.
+        return "BIOTECH"
     if st in ("NIH", "FED") or "FEDERAL" in st or "GOVERNMENT" in st:
         return "GOVERNMENT"
     if "NETWORK" in st:
         return "OTHER"
     if "UNIVERSITY" in st or "ACADEMIC" in st or "COLLEGE" in st:
         return "ACADEMIC"
+    # No class from the feed — fall back to name cues so biotechs aren't all OTHER.
+    if name in _BIG_PHARMA:
+        return "PHARMA"
+    if any(cue in name for cue in _BIOTECH_CUES):
+        return "BIOTECH"
     return "OTHER"
 
 
@@ -246,7 +274,7 @@ def extract_from_trials():
     now = datetime.utcnow().isoformat()
 
     for slug, info in sponsor_map.items():
-        org_type = _classify_org_type(info["sponsor_type"])
+        org_type = _classify_org_type(info["sponsor_type"], info["canonical_name"])
         therapeutic_focus = json.dumps(sorted(info["therapeutic_areas"]))
         aliases_list = sorted(info["aliases"])
 
@@ -258,10 +286,12 @@ def extract_from_trials():
             """,
             (slug, info["canonical_name"], json.dumps(aliases_list), org_type, therapeutic_focus, now),
         )
-        # Always refresh therapeutic_focus from current data (analyst-editable fields are untouched)
+        # Refresh therapeutic_focus, aliases AND org_type from current data so a
+        # re-pull re-classifies (org_type used to be frozen on first insert, which
+        # left BIOTECH unassigned). Analyst-editable fields are untouched.
         conn.execute(
-            "UPDATE organizations SET therapeutic_focus = ?, aliases = ? WHERE id = ?",
-            (therapeutic_focus, json.dumps(aliases_list), slug),
+            "UPDATE organizations SET therapeutic_focus = ?, aliases = ?, org_type = ? WHERE id = ?",
+            (therapeutic_focus, json.dumps(aliases_list), org_type, slug),
         )
 
         for alias in info["aliases"]:

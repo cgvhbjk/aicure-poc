@@ -1,0 +1,31 @@
+"""Acquisition / M&A news stream (§4) — incl. private-company buyouts.
+
+A buyout headline must classify as the 'acquisition' event type and surface as a
+lead regardless of any trial touchpoint ("this got bought — why?").
+"""
+from rss_parser import classify_event_type
+import news_nlp
+
+
+def test_buyout_headline_classified_as_acquisition():
+    assert classify_event_type("BigPharma to acquire SmallBio in $2B deal") == "acquisition"
+    assert classify_event_type("NovaCorp completes acquisition of GeneCo") == "acquisition"
+    # Acquisition precedence beats other signals in the same headline.
+    assert classify_event_type(
+        "Pharma to acquire biotech, will initiate a Phase 2 trial") == "acquisition"
+
+
+def test_acquisition_applies_without_trial_touchpoint():
+    item = {
+        "title": "Acme Pharma to acquire NovaBio to expand its CNS pipeline",
+        "body_snippet": "Acme Pharma agreed to acquire NovaBio to bolster its "
+                        "depression pipeline.",
+        "event_type": "acquisition",
+        "url": "http://example.com/deal",
+    }
+    a = news_nlp.analyze(item, use_llm=False)   # force rules path
+    assert a["applies_to_aicure"] is True
+    assert a["aicure_category"] == "Acquisition / M&A"
+    assert a["not_yet_started"] is True
+    assert a.get("acquirer") and a.get("target")
+    assert "NovaBio" in (a.get("target") or "")

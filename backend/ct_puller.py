@@ -13,17 +13,37 @@ os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
 BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 
+# Indication-driven search terms (general indications / drug *classes*, not brand
+# names). Ordered to lead with AiCure's real won-deal focus — CNS / psychiatry &
+# neurology — then cardiometabolic as a secondary net. Brand-name detection still
+# happens downstream via text_match.DRUG_KEYWORDS; the search itself stays general.
 CONDITIONS = [
-    "GLP-1",
+    # CNS / psychiatry (primary)
+    "schizophrenia",
+    "major depressive disorder",
+    "treatment resistant depression",
+    "bipolar disorder",
+    "post-traumatic stress disorder",
+    "generalized anxiety disorder",
+    "attention deficit hyperactivity disorder",
+    "substance use disorder",
+    "alcohol use disorder",
+    "opioid use disorder",
+    "tardive dyskinesia",
+    # Neurology (primary)
+    "Parkinson disease",
+    "Alzheimer disease",
+    "Huntington disease",
+    "amyotrophic lateral sclerosis",
+    "multiple sclerosis",
+    "epilepsy",
+    "essential tremor",
+    # Cardiometabolic (secondary)
     "obesity",
-    "semaglutide",
-    "tirzepatide",
-    "liraglutide",
-    "Type 2 Diabetes",
-    "weight loss",
-    "cardiac care",
+    "type 2 diabetes",
     "heart failure",
     "atrial fibrillation",
+    "GLP-1",
 ]
 
 _EPRO_KEYWORDS = [
