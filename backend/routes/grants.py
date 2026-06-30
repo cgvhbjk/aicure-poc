@@ -5,9 +5,7 @@ the moved handler bodies resolve bare names (row_to_dict, get_connection,
 _trials_where, OrgUpdate, …) exactly as before — no fragile per-name import list.
 """
 from fastapi import APIRouter
-import api as _api
-
-globals().update({k: v for k, v in vars(_api).items() if not k.startswith('__')})
+from routes._shared import *  # noqa: F401,F403 (shared helpers/models + framework re-exports)
 
 router = APIRouter()
 
