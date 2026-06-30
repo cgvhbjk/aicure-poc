@@ -4,6 +4,8 @@ Shared helpers/models/query-builders/jobs live in the dependency-free
 routes/_shared module; this module imports them (explicitly)
 so the moved handler bodies resolve those bare names. No api<->routes cycle.
 """
+import traceback
+
 from fastapi import APIRouter
 from routes._shared import ( HTTPException, MergeConfirm, MergeReview, Optional, Query,
     _ORG_FK_TABLES, _TRIAL_FK_TABLES, _naive_utcnow, _snapshot_pre_merge, get_connection,
@@ -212,10 +214,13 @@ def confirm_merge(merge_id: int, body: MergeConfirm):
         conn.rollback()
         conn.close()
         raise
-    except Exception as e:
+    except Exception:
         conn.rollback()
         conn.close()
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log the traceback for the operator; return a generic message rather than
+        # leaking the raw exception (which can carry SQL/internal detail) to clients.
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Merge operation failed; see server logs")
     finally:
         try:
             conn.close()
@@ -284,10 +289,13 @@ def undo_merge(merge_id: int):
         conn.rollback()
         conn.close()
         raise
-    except Exception as e:
+    except Exception:
         conn.rollback()
         conn.close()
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log the traceback for the operator; return a generic message rather than
+        # leaking the raw exception (which can carry SQL/internal detail) to clients.
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Merge operation failed; see server logs")
     finally:
         try:
             conn.close()
