@@ -1,11 +1,12 @@
 """Misc routes — split out of api.py.
 
 Shared helpers/models/query-builders/jobs live in the dependency-free
-routes/_shared module; this module imports them (`from routes._shared import *`)
+routes/_shared module; this module imports them (explicitly)
 so the moved handler bodies resolve those bare names. No api<->routes cycle.
 """
 from fastapi import APIRouter
-from routes._shared import *  # noqa: F401,F403 (shared helpers/models + framework re-exports)
+from routes._shared import ( File, Form, HTTPException, UploadFile, _MAX_UPLOAD_BYTES,
+    _UPLOADS_DIR, _naive_utcnow, get_connection, os, re)
 
 router = APIRouter()
 

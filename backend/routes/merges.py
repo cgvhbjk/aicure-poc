@@ -1,11 +1,13 @@
 """Merges routes — split out of api.py.
 
 Shared helpers/models/query-builders/jobs live in the dependency-free
-routes/_shared module; this module imports them (`from routes._shared import *`)
+routes/_shared module; this module imports them (explicitly)
 so the moved handler bodies resolve those bare names. No api<->routes cycle.
 """
 from fastapi import APIRouter
-from routes._shared import *  # noqa: F401,F403 (shared helpers/models + framework re-exports)
+from routes._shared import ( HTTPException, MergeConfirm, MergeReview, Optional, Query,
+    _ORG_FK_TABLES, _TRIAL_FK_TABLES, _naive_utcnow, _snapshot_pre_merge, get_connection,
+    row_to_dict, timedelta)
 
 router = APIRouter()
 

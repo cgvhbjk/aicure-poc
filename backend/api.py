@@ -26,7 +26,12 @@ from db import get_connection, DB_PATH, request_connection_scope
 from scoring import score_grant, score_trial
 
 # Shared helpers/models/query-builders/jobs live in routes/_shared (a clean leaf
-# both api.py and the route modules import one-way — no api<->routes cycle).
+# both api.py and the route modules import one-way — no api<->routes cycle). The
+# route modules import the specific names they use EXPLICITLY; api.py keeps the
+# star-import deliberately — it both gives the middleware/lifespan the shared
+# helpers AND RE-EXPORTS the full surface as `api.X`, which existing callers rely
+# on (e.g. tests `from api import _trials_where, MergeConfirm`). Not the bare-name
+# handler usage the route modules had, so it's a deliberate re-export, not a smell.
 from routes._shared import *  # noqa: F401,F403,E402
 
 @asynccontextmanager
