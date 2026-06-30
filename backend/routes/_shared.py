@@ -14,7 +14,7 @@ import json
 import base64
 import hmac
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import (Query, HTTPException, Header, UploadFile, File, Form,  # noqa: F401
                      BackgroundTasks, Request, Response)
@@ -24,6 +24,12 @@ from pydantic import BaseModel
 
 from db import get_connection, DB_PATH, request_connection_scope  # noqa: F401
 from scoring import score_grant, score_trial  # noqa: F401
+
+
+def _naive_utcnow() -> datetime:
+    """Naive UTC now. _naive_utcnow() is deprecated/removal-tracked; this is
+    the drop-in naive-UTC equivalent used across the HTTP layer."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -185,7 +191,7 @@ ORG_SORTABLE_COLUMNS = {"canonical_name", "org_type", "trial_count"}
 def cleanup_old_news():
     """Delete non-announcement news older than 7 days and repair has_news flags."""
     conn = get_connection()
-    cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    cutoff = (_naive_utcnow() - timedelta(days=7)).isoformat()
     try:
         # One transaction: dropping the links, dropping the news, and repairing
         # the denormalized has_news flag must all land or none — a partial run
@@ -231,11 +237,11 @@ def run_daily_news():
     try:
         from rss_parser import parse_all_feeds
         from linker import run_linker
-        print(f"[daily-news] Starting at {datetime.utcnow().isoformat()}")
+        print(f"[daily-news] Starting at {_naive_utcnow().isoformat()}")
         parse_all_feeds()
         run_linker()
         cleanup_old_news()
-        print(f"[daily-news] Done at {datetime.utcnow().isoformat()}")
+        print(f"[daily-news] Done at {_naive_utcnow().isoformat()}")
         return True
     except Exception:
         # Log the full traceback for the operator, then re-raise: a refresh that
@@ -750,7 +756,7 @@ def _csv_stream(name, columns, row_query, params, postprocess=None):
         finally:
             conn.close()
 
-    filename = f"{name}_export_{datetime.utcnow():%Y%m%d}.csv"
+    filename = f"{name}_export_{_naive_utcnow():%Y%m%d}.csv"
     return StreamingResponse(
         rows_iter(),
         media_type="text/csv",

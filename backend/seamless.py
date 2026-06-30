@@ -143,8 +143,9 @@ def _cached_contacts(conn, cache_key):
 
     A corrupt row is logged and treated as a MISS would re-spend a credit, so the
     log makes a systematically-bad cache visible instead of silently bleeding
-    credits. Error markers (failed lookups) expire on a shorter TTL and are served
-    as an empty list within that window so an immediate retry doesn't re-bill."""
+    credits. A fresh error marker (a failed lookup) returns the _CACHE_ERROR
+    sentinel within the short error-TTL so the caller reports the failure honestly
+    (no re-bill); after that window it expires to a miss so a retry hits the API."""
     row = conn.execute(
         "SELECT response_json, fetched_at FROM seamless_cache WHERE cache_key = ?",
         (cache_key,),

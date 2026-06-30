@@ -108,7 +108,7 @@ def pull_ada():
                     upsert_grant(build_grant_record(combined, **record), conn)
                     total_inserted += 1
             except Exception as e:
-                print(f"  [WARN] ADA record error ({award_id}): {e}")
+                print(f"  [WARN] ADA record error ({item.get('DOI')}): {e}")
 
         conn.commit()
         next_cursor = data.get("next-cursor")

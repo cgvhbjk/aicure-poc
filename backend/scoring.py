@@ -23,6 +23,7 @@ Off-target leads are SUPPRESSED (scored 0 with an "excluded: …" reason) rather
 merely down-ranked, so the sorted grids/digests stay tight.
 """
 import json
+import re
 from datetime import datetime, timezone
 from dateutil.parser import parse as dateparse
 
@@ -85,9 +86,10 @@ _SELF_ADMIN_CUES = _ORAL_CUES + [
     "autoinjector", "auto-injector", "pen injector", "prefilled pen", "take-home",
     "outpatient", "once-daily", "once daily", "twice daily", "daily dosing",
 ]
-# A transdermal patch is NOT a pill-ingestion touchpoint — gate it out.
-_PATCH_NEG_CUES = ["transdermal", "patch", "skin patch", "topical patch",
-                   "dermal patch", "adhesive patch"]
+# A transdermal patch is NOT a pill-ingestion touchpoint — gate it out. Word-
+# boundary matched so "patch" doesn't fire on "dispatch"/"crosspatch"; the
+# multi-word forms (skin/topical/dermal/adhesive patch) all contain "patch".
+_PATCH_NEG_PATTERN = re.compile(r"\b(?:transdermal|patch)\b")
 _WEIGHT_VITAL_CUES = [
     "weight", "body weight", "bmi", "obes", "blood pressure", "waist circumference",
     "vital signs", "weight loss", "weight management",
@@ -96,7 +98,7 @@ _WEIGHT_VITAL_CUES = [
 
 def _is_patch_only(text):
     """True if the text describes a transdermal patch with no oral/pill cue."""
-    return any(k in text for k in _PATCH_NEG_CUES) and not any(k in text for k in _ORAL_CUES)
+    return bool(_PATCH_NEG_PATTERN.search(text)) and not any(k in text for k in _ORAL_CUES)
 
 
 def _adherence_risk(text, area):

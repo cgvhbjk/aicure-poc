@@ -12,7 +12,7 @@ import { safeHref } from '../utils/url'
 // it includes the /pipeline subpath in the proxied prod deploy).
 const _API_BASE = apiBase
 
-// Columns the backend can ORDER BY (mirrors TRIAL_SORTABLE_COLUMNS in api.py).
+// Columns the backend can ORDER BY (mirrors TRIAL_SORTABLE_COLUMNS in routes/_shared.py).
 // Any column outside this set is display-only; marking it unsortable avoids
 // showing a sort arrow the server would ignore.
 const SORTABLE_FIELDS = new Set([

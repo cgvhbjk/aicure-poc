@@ -13,7 +13,7 @@ import { safeHref } from '../utils/url'
 // (shared with api.js so it includes the /pipeline subpath in prod).
 const _API_BASE = apiBase
 
-// Columns the backend can ORDER BY (mirrors GRANT_SORTABLE_COLUMNS in api.py,
+// Columns the backend can ORDER BY (mirrors GRANT_SORTABLE_COLUMNS in routes/_shared.py,
 // plus the precomputed aicure_fit). Any column outside this set is display-only;
 // marking it unsortable avoids showing a sort arrow the server would ignore.
 const SORTABLE_FIELDS = new Set([

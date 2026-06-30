@@ -1,8 +1,8 @@
 """Merges routes — split out of api.py.
 
-Shared helpers/models/constants stay in api.py; we copy its module globals so
-the moved handler bodies resolve bare names (row_to_dict, get_connection,
-_trials_where, OrgUpdate, …) exactly as before — no fragile per-name import list.
+Shared helpers/models/query-builders/jobs live in the dependency-free
+routes/_shared module; this module imports them (`from routes._shared import *`)
+so the moved handler bodies resolve those bare names. No api<->routes cycle.
 """
 from fastapi import APIRouter
 from routes._shared import *  # noqa: F401,F403 (shared helpers/models + framework re-exports)
@@ -26,7 +26,7 @@ def get_merges(
 
     if status == "PENDING":
         where.append("(mc.status = 'PENDING' OR (mc.status = 'SNOOZED' AND mc.snooze_until < ?))")
-        params.append(datetime.utcnow().isoformat())
+        params.append(_naive_utcnow().isoformat())
     else:
         where.append("mc.status = ?")
         params.append(status)
@@ -198,7 +198,7 @@ def confirm_merge(merge_id: int, body: MergeConfirm):
                 )
                 conn.execute("DELETE FROM organizations WHERE id = ?", (loser_id,))
 
-        now = datetime.utcnow().isoformat()
+        now = _naive_utcnow().isoformat()
         conn.execute(
             """UPDATE merge_candidates SET status = 'CONFIRMED_MERGE', reviewed_by = ?,
                reviewed_at = ?, merged_into = ?, loser_snapshot = ? WHERE id = ?""",
@@ -303,7 +303,7 @@ def reject_merge(merge_id: int, body: Optional[MergeReview] = None):
     reviewed_by = body.reviewed_by if body else ""
     conn.execute(
         "UPDATE merge_candidates SET status = 'REJECTED', reviewed_by = ?, reviewed_at = ? WHERE id = ?",
-        (reviewed_by, datetime.utcnow().isoformat(), merge_id),
+        (reviewed_by, _naive_utcnow().isoformat(), merge_id),
     )
     conn.commit()
     conn.close()
@@ -317,7 +317,7 @@ def snooze_merge(merge_id: int):
     if not mc:
         conn.close()
         raise HTTPException(status_code=404, detail="Not found")
-    snooze_until = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    snooze_until = (_naive_utcnow() + timedelta(days=30)).isoformat()
     conn.execute(
         "UPDATE merge_candidates SET status = 'SNOOZED', snooze_until = ? WHERE id = ?",
         (snooze_until, merge_id),
@@ -330,8 +330,8 @@ def snooze_merge(merge_id: int):
 @router.get("/merges/stats")
 def get_merge_stats():
     conn = get_connection()
-    now = datetime.utcnow().isoformat()
-    week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    now = _naive_utcnow().isoformat()
+    week_ago = (_naive_utcnow() - timedelta(days=7)).isoformat()
 
     pending = conn.execute(
         "SELECT COUNT(*) FROM merge_candidates WHERE status = 'PENDING'"

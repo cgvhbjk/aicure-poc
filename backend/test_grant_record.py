@@ -58,3 +58,15 @@ def test_upsert_roundtrip():
         conn.commit()
     finally:
         conn.close()
+
+
+def test_grant_record_fields_match_db_schema():
+    """Every canonical grant field must be a real column on the grants table, so a
+    built record can't fail at INSERT time — caught here in CI, not at ingest."""
+    conn = get_connection()
+    try:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(grants)")}
+    finally:
+        conn.close()
+    missing = [f for f in GRANT_RECORD_FIELDS if f not in cols]
+    assert not missing, f"GRANT_RECORD_FIELDS not in grants schema: {missing}"

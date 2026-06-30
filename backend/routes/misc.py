@@ -1,8 +1,8 @@
 """Misc routes — split out of api.py.
 
-Shared helpers/models/constants stay in api.py; we copy its module globals so
-the moved handler bodies resolve bare names (row_to_dict, get_connection,
-_trials_where, OrgUpdate, …) exactly as before — no fragile per-name import list.
+Shared helpers/models/query-builders/jobs live in the dependency-free
+routes/_shared module; this module imports them (`from routes._shared import *`)
+so the moved handler bodies resolve those bare names. No api<->routes cycle.
 """
 from fastapi import APIRouter
 from routes._shared import *  # noqa: F401,F403 (shared helpers/models + framework re-exports)
@@ -25,7 +25,7 @@ async def upload_file(
     if entity_type not in valid_types:
         raise HTTPException(status_code=400, detail=f"entity_type must be one of {list(valid_types)}")
 
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    ts = _naive_utcnow().strftime("%Y%m%dT%H%M%S")
     safe_name = re.sub(r"[^\w.\-]", "_", file.filename or "upload")
     save_path = os.path.join(_UPLOADS_DIR, f"{ts}_{safe_name}")
     with open(save_path, "wb") as fh:
@@ -42,7 +42,7 @@ async def upload_file(
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (file.filename, entity_type,
          result["row_count"], result["matched"], result["inserted"], result["skipped"],
-         datetime.utcnow().isoformat(), analyst_name, notes, save_path),
+         _naive_utcnow().isoformat(), analyst_name, notes, save_path),
     )
     upload_id = cur.lastrowid
     conn.commit()

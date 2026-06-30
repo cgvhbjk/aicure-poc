@@ -5,7 +5,7 @@ import OrgDetailPanel from './OrgDetailPanel'
 import { GRID_LOADING_TEMPLATE, GRID_EMPTY_TEMPLATE, gridErrorMessage } from '../utils/gridUi'
 import { safeHref } from '../utils/url'
 
-// Columns the backend can ORDER BY (mirrors ORG_SORTABLE_COLUMNS in api.py).
+// Columns the backend can ORDER BY (mirrors ORG_SORTABLE_COLUMNS in routes/_shared.py).
 const SORTABLE_FIELDS = new Set(['canonical_name', 'org_type', 'trial_count'])
 
 const ORG_TYPE_STYLES = {
@@ -154,6 +154,7 @@ export default function OrgsTable({ filters, filterOpen, onToggleFilter, onSelec
 
       {selectedOrg && (
         <OrgDetailPanel
+          key={selectedOrg.id}
           org={selectedOrg}
           onClose={() => setSelectedOrg(null)}
           onSelectTrial={onSelectTrial}

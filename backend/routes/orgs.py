@@ -1,8 +1,8 @@
 """Orgs routes — split out of api.py.
 
-Shared helpers/models/constants stay in api.py; we copy its module globals so
-the moved handler bodies resolve bare names (row_to_dict, get_connection,
-_trials_where, OrgUpdate, …) exactly as before — no fragile per-name import list.
+Shared helpers/models/query-builders/jobs live in the dependency-free
+routes/_shared module; this module imports them (`from routes._shared import *`)
+so the moved handler bodies resolve those bare names. No api<->routes cycle.
 """
 from fastapi import APIRouter
 from routes._shared import *  # noqa: F401,F403 (shared helpers/models + framework re-exports)
@@ -121,7 +121,7 @@ def add_org_contact(org_id: str, body: ContactCreate):
         (
             org_id, body.full_name, body.title, body.department, body.email,
             body.linkedin_url, body.source_url, body.is_decision_maker or 0,
-            body.notes, datetime.utcnow().isoformat(),
+            body.notes, _naive_utcnow().isoformat(),
         ),
     )
     new_id = cur.lastrowid
