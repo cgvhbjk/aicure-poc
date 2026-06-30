@@ -589,7 +589,6 @@ _ORG_FK_TABLES = [
 def _snapshot_pre_merge(conn, entity_type, survivor_id, loser_id):
     """Capture the loser row, survivor row, and all FK rows touching either entity,
     so a later /undo can restore the pre-merge world byte-for-byte."""
-    import json as _json
     entity_table = "trials" if entity_type == "trials" else "organizations"
     fk_tables = _TRIAL_FK_TABLES if entity_type == "trials" else _ORG_FK_TABLES
 
@@ -603,7 +602,7 @@ def _snapshot_pre_merge(conn, entity_type, survivor_id, loser_id):
         ).fetchall()
         fk_pre[table] = [dict(r) for r in rows]
 
-    return _json.dumps({
+    return json.dumps({
         "loser_row": dict(loser) if loser else None,
         "survivor_row": dict(survivor) if survivor else None,
         "fk_pre_state": fk_pre,

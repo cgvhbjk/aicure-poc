@@ -4,6 +4,7 @@ Shared helpers/models/query-builders/jobs live in the dependency-free
 routes/_shared module; this module imports them (explicitly)
 so the moved handler bodies resolve those bare names. No api<->routes cycle.
 """
+import json
 import traceback
 
 from fastapi import APIRouter
@@ -107,11 +108,10 @@ def confirm_merge(merge_id: int, body: MergeConfirm):
                 raise HTTPException(status_code=400, detail=f"Survivor trial {survivor_id} not found")
             if loser:
                 # Transfer registry info
-                import json as _json
-                s_sources = _json.loads(survivor["registry_sources"] or "[]")
-                s_ids = _json.loads(survivor["all_registry_ids"] or "[]")
-                b_sources = _json.loads(loser["registry_sources"] or "[]")
-                b_ids = _json.loads(loser["all_registry_ids"] or "[]")
+                s_sources = json.loads(survivor["registry_sources"] or "[]")
+                s_ids = json.loads(survivor["all_registry_ids"] or "[]")
+                b_sources = json.loads(loser["registry_sources"] or "[]")
+                b_ids = json.loads(loser["all_registry_ids"] or "[]")
                 for src in b_sources:
                     if src not in s_sources:
                         s_sources.append(src)
@@ -125,7 +125,7 @@ def confirm_merge(merge_id: int, body: MergeConfirm):
                 extra_params = [reg_val] if id_col else []
                 conn.execute(
                     f"UPDATE trials SET registry_sources = ?, all_registry_ids = ?{extra_sql} WHERE id = ?",
-                    [_json.dumps(s_sources), _json.dumps(s_ids)] + extra_params + [survivor_id],
+                    [json.dumps(s_sources), json.dumps(s_ids)] + extra_params + [survivor_id],
                 )
 
                 # Reassign FK references
@@ -142,7 +142,6 @@ def confirm_merge(merge_id: int, body: MergeConfirm):
                 conn.execute("DELETE FROM trials WHERE id = ?", (loser_id,))
 
         elif mc["entity_type"] == "organizations":
-            import json as _json
             survivor = conn.execute("SELECT * FROM organizations WHERE id = ?", (survivor_id,)).fetchone()
             loser = conn.execute("SELECT * FROM organizations WHERE id = ?", (loser_id,)).fetchone()
             if not survivor:
@@ -150,21 +149,21 @@ def confirm_merge(merge_id: int, body: MergeConfirm):
             if loser:
                 # Merge aliases + therapeutic_focus arrays, preferring survivor for scalars.
                 def _merge_json_list(a, b):
-                    la = _json.loads(a or "[]") if a else []
-                    lb = _json.loads(b or "[]") if b else []
+                    la = json.loads(a or "[]") if a else []
+                    lb = json.loads(b or "[]") if b else []
                     out = list(la)
                     for x in lb:
                         if x not in out:
                             out.append(x)
-                    return _json.dumps(out)
+                    return json.dumps(out)
 
                 merged_aliases = _merge_json_list(survivor["aliases"], loser["aliases"])
                 # Add the loser's canonical_name as an alias too.
                 try:
-                    al = _json.loads(merged_aliases)
+                    al = json.loads(merged_aliases)
                     if loser["canonical_name"] and loser["canonical_name"] not in al:
                         al.append(loser["canonical_name"])
-                        merged_aliases = _json.dumps(al)
+                        merged_aliases = json.dumps(al)
                 except Exception:
                     pass
                 merged_focus = _merge_json_list(survivor["therapeutic_focus"], loser["therapeutic_focus"])
@@ -231,7 +230,6 @@ def confirm_merge(merge_id: int, body: MergeConfirm):
 @router.post("/merges/{merge_id}/undo")
 def undo_merge(merge_id: int):
     """Restore the loser entity and pre-merge FK state from the snapshot taken at confirm time."""
-    import json as _json
     conn = get_connection()
     try:
         mc = conn.execute("SELECT * FROM merge_candidates WHERE id = ?", (merge_id,)).fetchone()
@@ -242,7 +240,7 @@ def undo_merge(merge_id: int):
         if not mc["loser_snapshot"]:
             raise HTTPException(status_code=400, detail="No snapshot available — this merge was confirmed before undo was supported")
 
-        snapshot = _json.loads(mc["loser_snapshot"])
+        snapshot = json.loads(mc["loser_snapshot"])
         entity_type = mc["entity_type"]
         survivor_id = mc["merged_into"] or mc["record_a_id"]
         loser_id = mc["record_b_id"] if survivor_id == mc["record_a_id"] else mc["record_a_id"]

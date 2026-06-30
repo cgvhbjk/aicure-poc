@@ -4,12 +4,54 @@ Shared helpers/models/query-builders/jobs live in the dependency-free
 routes/_shared module; this module imports them (explicitly)
 so the moved handler bodies resolve those bare names. No api<->routes cycle.
 """
-from fastapi import APIRouter
+from typing import NamedTuple
+
+from fastapi import APIRouter, Depends
 from routes._shared import ( HTTPException, List, Optional, Query, _GRANT_EXPORT_COLUMNS,
     _GRANT_GRID_COLS, _csv_stream, _grants_order_by, _grants_where, get_connection,
     row_to_dict, score_grant)
 
 router = APIRouter()
+
+
+class _GrantQuery(NamedTuple):
+    where_sql: str
+    params: list
+    sort: Optional[str]
+    sort_dir: str
+
+
+def _grant_query(
+    q: Optional[str] = None,
+    source: Optional[List[str]] = Query(default=None),
+    therapeutic_area: Optional[List[str]] = Query(default=None),
+    status: Optional[List[str]] = Query(default=None),
+    country: Optional[List[str]] = Query(default=None),
+    country_q: Optional[str] = None,
+    country_q_not: Optional[str] = None,
+    has_trial_link: Optional[bool] = None,
+    min_amount: Optional[int] = None,
+    max_amount: Optional[int] = None,
+    activity_code: Optional[List[str]] = Query(default=None),
+    org_type: Optional[List[str]] = Query(default=None),
+    research_type: Optional[List[str]] = Query(default=None),
+    agency_division: Optional[List[str]] = Query(default=None),
+    fiscal_year_min: Optional[int] = None,
+    fiscal_year_max: Optional[int] = None,
+    award_date_from: Optional[str] = None,
+    award_date_to: Optional[str] = None,
+    sort: Optional[str] = "aicure_fit",
+    sort_dir: str = Query("desc", alias="dir"),
+) -> _GrantQuery:
+    """Shared grant filter + sort query params for /grants and /grants/export
+    (previously duplicated verbatim). _grants_where runs here — before the handler
+    opens a connection — so a bad date param 422s without leaking one."""
+    where_sql, params = _grants_where(
+        q, source, therapeutic_area, status, country, country_q, country_q_not,
+        has_trial_link, min_amount, max_amount, activity_code, org_type,
+        research_type, agency_division, fiscal_year_min, fiscal_year_max,
+        award_date_from, award_date_to)
+    return _GrantQuery(where_sql, params, sort, sort_dir)
 
 
 @router.get("/grants/stats")
@@ -94,36 +136,11 @@ def get_grants_filter_options():
 
 @router.get("/grants")
 def get_grants(
-    q: Optional[str] = None,
-    source: Optional[List[str]] = Query(default=None),
-    therapeutic_area: Optional[List[str]] = Query(default=None),
-    status: Optional[List[str]] = Query(default=None),
-    country: Optional[List[str]] = Query(default=None),
-    country_q: Optional[str] = None,
-    country_q_not: Optional[str] = None,
-    has_trial_link: Optional[bool] = None,
-    min_amount: Optional[int] = None,
-    max_amount: Optional[int] = None,
-    activity_code: Optional[List[str]] = Query(default=None),
-    org_type: Optional[List[str]] = Query(default=None),
-    research_type: Optional[List[str]] = Query(default=None),
-    agency_division: Optional[List[str]] = Query(default=None),
-    fiscal_year_min: Optional[int] = None,
-    fiscal_year_max: Optional[int] = None,
-    award_date_from: Optional[str] = None,
-    award_date_to: Optional[str] = None,
-    sort: Optional[str] = "aicure_fit",
-    sort_dir: str = Query("desc", alias="dir"),
+    gq: _GrantQuery = Depends(_grant_query),
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
 ):
-    # Build the WHERE first: _iso_day() can raise 422 on a bad date param, and
-    # doing it before opening the connection avoids leaking one on that path.
-    where_sql, params = _grants_where(
-        q, source, therapeutic_area, status, country, country_q, country_q_not,
-        has_trial_link, min_amount, max_amount, activity_code, org_type,
-        research_type, agency_division, fiscal_year_min, fiscal_year_max,
-        award_date_from, award_date_to)
+    where_sql, params = gq.where_sql, gq.params
     conn = get_connection()
 
     # One pass for both header aggregates instead of two scans of the same
@@ -138,7 +155,7 @@ def get_grants(
     # default fit ranking paginates server-side like any other sort.
     rows = conn.execute(
         f"SELECT {_GRANT_GRID_COLS} FROM grants {where_sql} "
-        f"{_grants_order_by(sort, sort_dir)} LIMIT ? OFFSET ?",
+        f"{_grants_order_by(gq.sort, gq.sort_dir)} LIMIT ? OFFSET ?",
         params + [page_size, offset],
     ).fetchall()
 
@@ -160,45 +177,18 @@ def get_grants(
 
 
 @router.get("/grants/export")
-def export_grants(
-    q: Optional[str] = None,
-    source: Optional[List[str]] = Query(default=None),
-    therapeutic_area: Optional[List[str]] = Query(default=None),
-    status: Optional[List[str]] = Query(default=None),
-    country: Optional[List[str]] = Query(default=None),
-    country_q: Optional[str] = None,
-    country_q_not: Optional[str] = None,
-    has_trial_link: Optional[bool] = None,
-    min_amount: Optional[int] = None,
-    max_amount: Optional[int] = None,
-    activity_code: Optional[List[str]] = Query(default=None),
-    org_type: Optional[List[str]] = Query(default=None),
-    research_type: Optional[List[str]] = Query(default=None),
-    agency_division: Optional[List[str]] = Query(default=None),
-    fiscal_year_min: Optional[int] = None,
-    fiscal_year_max: Optional[int] = None,
-    award_date_from: Optional[str] = None,
-    award_date_to: Optional[str] = None,
-    sort: Optional[str] = "aicure_fit",
-    sort_dir: str = Query("desc", alias="dir"),
-):
+def export_grants(gq: _GrantQuery = Depends(_grant_query)):
     """Stream the FULL filtered grant set as CSV (honors the grid's filters +
     sort). Unlike the client-side export, this covers every matching row, not
     just the pages currently loaded into the infinite-scroll grid."""
-    where_sql, params = _grants_where(
-        q, source, therapeutic_area, status, country, country_q, country_q_not,
-        has_trial_link, min_amount, max_amount, activity_code, org_type,
-        research_type, agency_division, fiscal_year_min, fiscal_year_max,
-        award_date_from, award_date_to)
-
     def postprocess(g):
         if g.get("aicure_fit") is None:
             g["aicure_fit"] = score_grant(g)
 
     return _csv_stream(
         "grants", _GRANT_EXPORT_COLUMNS,
-        f"SELECT * FROM grants {where_sql} {_grants_order_by(sort, sort_dir)}",
-        params, postprocess)
+        f"SELECT * FROM grants {gq.where_sql} {_grants_order_by(gq.sort, gq.sort_dir)}",
+        gq.params, postprocess)
 
 
 @router.get("/grants/{grant_id}/trials")

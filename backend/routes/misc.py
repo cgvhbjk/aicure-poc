@@ -5,6 +5,7 @@ routes/_shared module; this module imports them (explicitly)
 so the moved handler bodies resolve those bare names. No api<->routes cycle.
 """
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 from routes._shared import ( File, Form, HTTPException, UploadFile, _MAX_UPLOAD_BYTES,
     _UPLOADS_DIR, _naive_utcnow, get_connection, os, re)
 
@@ -26,14 +27,21 @@ async def upload_file(
     if entity_type not in valid_types:
         raise HTTPException(status_code=400, detail=f"entity_type must be one of {list(valid_types)}")
 
+    # The disk write, file parsing (openpyxl/csv), and DB writes are all blocking —
+    # run them in a worker thread so they don't stall the event loop.
+    return await run_in_threadpool(
+        _save_and_process, content, file.filename or "", entity_type, analyst_name, notes)
+
+
+def _save_and_process(content, filename, entity_type, analyst_name, notes):
     ts = _naive_utcnow().strftime("%Y%m%dT%H%M%S")
-    safe_name = re.sub(r"[^\w.\-]", "_", file.filename or "upload")
+    safe_name = re.sub(r"[^\w.\-]", "_", filename or "upload")
     save_path = os.path.join(_UPLOADS_DIR, f"{ts}_{safe_name}")
     with open(save_path, "wb") as fh:
         fh.write(content)
 
     from upload_processor import process_upload
-    result = process_upload(content, file.filename or "", entity_type)
+    result = process_upload(content, filename, entity_type)
 
     conn = get_connection()
     cur = conn.execute(
@@ -41,7 +49,7 @@ async def upload_file(
            (filename, entity_type, row_count, matched_count, new_count, skipped_count,
             uploaded_at, uploaded_by, notes, file_path)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (file.filename, entity_type,
+        (filename, entity_type,
          result["row_count"], result["matched"], result["inserted"], result["skipped"],
          _naive_utcnow().isoformat(), analyst_name, notes, save_path),
     )
@@ -59,7 +67,7 @@ async def upload_file(
     return {
         "status": "all_failed" if all_failed else "ok",
         "upload_id": upload_id,
-        "filename": file.filename,
+        "filename": filename,
         "row_count": result["row_count"],
         "matched": result["matched"],
         "inserted": result["inserted"],
