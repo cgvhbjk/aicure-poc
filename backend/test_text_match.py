@@ -44,3 +44,23 @@ def test_drug_keywords_include_sglt2_and_dpp4_family():
     # The news side previously lacked these; the union now covers them.
     for d in ("sglt2", "dpp-4", "empagliflozin", "glp-1", "semaglutide"):
         assert d in DRUG_KEYWORDS
+
+
+# ── search-net ↔ classifier drift guards (canonical TARGET_CONDITIONS) ──────────
+
+def test_target_conditions_classify_to_declared_area():
+    """Every canonical search condition MUST classify into the area it's declared
+    under — otherwise the CT.gov search net and the scorer/classifier have drifted
+    (we'd search for a condition the scorer then files as off-focus and suppresses)."""
+    from text_match import TARGET_CONDITIONS
+    for area, term in TARGET_CONDITIONS:
+        assert classify_area(term) == area, \
+            f"search term {term!r} classifies as {classify_area(term)!r}, not {area!r}"
+
+
+def test_ct_conditions_derived_from_taxonomy_and_in_focus():
+    import ct_puller
+    from text_match import TARGET_CONDITIONS
+    assert ct_puller.CONDITIONS == [term for _area, term in TARGET_CONDITIONS]
+    for term in ct_puller.CONDITIONS:
+        assert classify_area(term) != "Other", f"searched term {term!r} is off-focus"

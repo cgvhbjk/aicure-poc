@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { FILTER_FIELDS, formatConditionLabel } from '../utils/conditions'
 import ConditionBuilder from './ConditionBuilder'
 
-export default function FilterBar({ conditions, onAdd, onEdit, onRemove, onClear, therapeuticAreas, countries, filterFields = FILTER_FIELDS }) {
+export default function FilterBar({ conditions, onAdd, onEdit, onRemove, onClear, therapeuticAreas, countries, filterFields = FILTER_FIELDS, dynamicOptions = {} }) {
   const [builderOpen, setBuilderOpen] = useState(false)
   const [editingCondition, setEditingCondition] = useState(null)
 
@@ -42,6 +42,7 @@ export default function FilterBar({ conditions, onAdd, onEdit, onRemove, onClear
             therapeuticAreas={therapeuticAreas}
             countries={countries}
             filterFields={filterFields}
+            dynamicOptions={dynamicOptions}
           />
         )}
       </div>

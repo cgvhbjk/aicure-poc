@@ -244,6 +244,19 @@ def _init_db():
             created_at            TEXT
         );
 
+        -- Seamless.AI contact-enrichment cache (§7). Seamless bills a credit per
+        -- lookup INCLUDING failed/no-result lookups, so we persist every response
+        -- (results AND known-empty negatives) keyed by the normalized query, and
+        -- only re-call the API on a cache miss or explicit force_refresh.
+        CREATE TABLE IF NOT EXISTS seamless_cache (
+            cache_key             TEXT PRIMARY KEY,
+            org_id                TEXT REFERENCES organizations(id),
+            response_json         TEXT,
+            contact_count         INTEGER DEFAULT 0,
+            credits_used          INTEGER DEFAULT 0,
+            fetched_at            TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_trial_org_links_org_id
             ON trial_org_links(org_id);
         CREATE INDEX IF NOT EXISTS idx_trial_org_links_trial_id
@@ -420,6 +433,13 @@ def _init_db():
         "ALTER TABLE trials ADD COLUMN crm_lead_id TEXT",
         "ALTER TABLE trials ADD COLUMN crm_pushed_at TEXT",
         "ALTER TABLE trials ADD COLUMN crm_push_action TEXT",
+        # Human-subjects flag for grants (§3a). Default 1 so pre-existing rows
+        # aren't retroactively excluded; new ingests set it from the abstract.
+        "ALTER TABLE grants ADD COLUMN human_subjects INTEGER DEFAULT 1",
+        # Set to 1 by patch_org when an analyst manually edits org_type, so the
+        # ingest's auto-reclassification (org_extractor.extract_from_trials) skips
+        # it and the manual value (CRO / DCT_VENDOR / …) isn't reverted each run.
+        "ALTER TABLE organizations ADD COLUMN org_type_locked INTEGER DEFAULT 0",
     ]:
         try:
             conn.execute(alter)

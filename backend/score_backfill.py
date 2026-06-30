@@ -23,13 +23,15 @@ from scoring import score_grant, score_trial
 _GRANT_SCORE_COLS = (
     "id", "title", "abstract", "conditions", "therapeutic_area", "amount_usd",
     "country", "award_date", "start_date", "end_date", "organization",
-    "pi_name", "linked_trial_id",
+    "pi_name", "linked_trial_id", "phase_mentioned", "sponsor_funder",
+    "human_subjects",
 )
 _TRIAL_SCORE_COLS = (
     "id", "title_brief", "brief_summary", "conditions", "interventions",
     "therapeutic_area", "phase", "status", "enrollment", "num_sites",
-    "lead_country", "sponsor", "pi_email", "registry_sources",
+    "lead_country", "sponsor", "cro_named", "pi_email", "registry_sources",
     "epro_ecoa", "digital_biomarkers", "dct_elements", "start_date",
+    "primary_completion", "study_completion",
 )
 
 

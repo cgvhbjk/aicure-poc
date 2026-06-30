@@ -8,10 +8,8 @@ from urllib.parse import quote
 import requests
 
 from grant_utils import (
-    classify_area, upsert_grant, EUR_TO_USD,
-    extract_phase, extract_conditions, extract_interventions,
+    build_grant_record, upsert_grant, EUR_TO_USD,
 )
-from registry_utils import extract_nct
 from db import get_connection
 
 SEARCH_TERMS = [
@@ -115,7 +113,6 @@ def pull_cordis():
                     agency_division = f"{programme} / {call}".strip(" /") if call else programme or None
 
                     source_url = row.get("URL") or f"https://cordis.europa.eu/project/id/{proj_id}"
-                    nct = extract_nct(combined)
 
                     record = {
                         "id": f"CORDIS-{proj_id}",
@@ -136,18 +133,12 @@ def pull_cordis():
                         "activity_code": row.get("frameworkProgramme") or row.get("FrameworkProgramme") or None,
                         "project_acronym": row.get("acronym") or row.get("Acronym") or None,
                         "research_type": row.get("legalBasis") or row.get("LegalBasis") or None,
-                        "therapeutic_area": classify_area(combined),
                         "source_url": source_url,
-                        "conditions": extract_conditions(combined),
-                        "interventions": extract_interventions(combined),
-                        "phase_mentioned": extract_phase(combined),
-                        "linked_trial_id": nct,
-                        "has_trial_link": 1 if nct else 0,
                     }
-                    upsert_grant(record, conn)
+                    upsert_grant(build_grant_record(combined, **record), conn)
                     total_inserted += 1
                 except Exception as e:
-                    print(f"  [WARN] CORDIS record error: {e}")
+                    print(f"  [WARN] CORDIS record error ({row.get('ID')}): {e}")
 
             conn.commit()
             if len(rows) < 100:

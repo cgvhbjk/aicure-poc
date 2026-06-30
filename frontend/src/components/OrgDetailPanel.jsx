@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { getOrgTrials, getOrgContacts, addOrgContact, patchOrg } from '../api'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { getOrgTrials, getOrgContacts, addOrgContact, enrichOrgContacts, patchOrg } from '../api'
 import { safeHref } from '../utils/url'
 
 const ORG_TYPE_OPTIONS = ['PHARMA', 'BIOTECH', 'CRO', 'DCT_VENDOR', 'DIGITAL_HEALTH', 'RPM', 'TELEHEALTH', 'ACADEMIC', 'GOVERNMENT', 'OTHER']
@@ -127,12 +127,37 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
   const [showContactForm, setShowContactForm] = useState(false)
   const [contactDraft, setContactDraft] = useState(EMPTY_CONTACT)
   const [savingContact, setSavingContact] = useState(false)
+  const [enriching, setEnriching] = useState(false)
+  const [enrichMsg, setEnrichMsg] = useState(null)
+  const [trialsError, setTrialsError] = useState(false)
+  const [contactsError, setContactsError] = useState(false)
+
+  // Track mount so a slow enrichment that resolves after the panel closes
+  // doesn't setState on an unmounted component.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   useEffect(() => {
     if (!org?.id) return
+    // Clear stale enrichment UI from a previously-viewed org (the rest of the
+    // panel's state is keyed off org?.id; keep this consistent).
+    setEnrichMsg(null)
+    setEnriching(false)
+    setTrialsError(false)
+    setContactsError(false)
     setLoadingTrials(true)
-    getOrgTrials(org.id).then((r) => setTrials(r.data)).catch(console.error).finally(() => setLoadingTrials(false))
-    getOrgContacts(org.id).then((r) => setContacts(r.data)).catch(console.error)
+    // On failure surface an error state, not just console — otherwise a failed
+    // load is indistinguishable from a genuinely empty org ("No contacts yet").
+    getOrgTrials(org.id)
+      .then((r) => setTrials(r.data))
+      .catch((e) => { console.error('Failed to load org trials', e); setTrialsError(true) })
+      .finally(() => setLoadingTrials(false))
+    getOrgContacts(org.id)
+      .then((r) => setContacts(r.data))
+      .catch((e) => { console.error('Failed to load org contacts', e); setContactsError(true) })
   }, [org?.id])
 
   const patch = useCallback(async (field, value) => {
@@ -143,6 +168,38 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
       console.error('Patch failed', e)
     }
   }, [org?.id, onOrgUpdated])
+
+  const handleEnrich = async () => {
+    setEnriching(true)
+    setEnrichMsg(null)
+    try {
+      const res = await enrichOrgContacts(org.id)
+      if (!mountedRef.current) return
+      if (Array.isArray(res.data?.contacts)) setContacts(res.data.contacts)
+      const st = res.data?.status || {}
+      if (st.ok) {
+        const calls = st.api_calls ?? 0
+        setEnrichMsg(`${st.source}: +${st.inserted ?? 0} added · ${calls} API call${calls === 1 ? '' : 's'}`)
+      } else {
+        setEnrichMsg(st.error || 'Enrichment unavailable')
+      }
+    } catch (e) {
+      // Report the actual failure rather than always blaming auth. Log the raw
+      // error so a Seamless outage / network fault is debuggable.
+      console.error('enrichOrgContacts failed', e)
+      if (!mountedRef.current) return
+      const status = e?.response?.status
+      const detail = e?.response?.data?.detail
+      setEnrichMsg(
+        detail
+        || (status === 401 || status === 403 ? 'Not authorized to enrich'
+            : status ? `Enrichment failed (HTTP ${status})`
+            : 'Enrichment failed — network or server error')
+      )
+    } finally {
+      if (mountedRef.current) setEnriching(false)
+    }
+  }
 
   const handleAddContact = async () => {
     if (!contactDraft.full_name.trim()) return
@@ -245,6 +302,8 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
             <div className="detail-section-title">Linked Trials</div>
             {loadingTrials ? (
               <p className="muted">Loading…</p>
+            ) : trialsError ? (
+              <p className="muted" style={{ color: '#b45309' }}>Couldn't load linked trials</p>
             ) : trials.length === 0 ? (
               <p className="muted">No linked trials</p>
             ) : (
@@ -276,14 +335,28 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
           <div style={{ marginBottom: 20 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
               <div className="detail-section-title" style={{ margin: 0 }}>Contacts</div>
-              <button
-                className="btn-sm"
-                onClick={() => setShowContactForm((v) => !v)}
-                style={{ fontSize: 11 }}
-              >
-                {showContactForm ? 'Cancel' : '+ Add contact'}
-              </button>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button
+                  className="btn-sm"
+                  onClick={handleEnrich}
+                  disabled={enriching}
+                  style={{ fontSize: 11 }}
+                  title="Find CMO / clinical decision-makers via Seamless.AI (cached to avoid re-spending credits)"
+                >
+                  {enriching ? 'Enriching…' : 'Enrich (Seamless)'}
+                </button>
+                <button
+                  className="btn-sm"
+                  onClick={() => setShowContactForm((v) => !v)}
+                  style={{ fontSize: 11 }}
+                >
+                  {showContactForm ? 'Cancel' : '+ Add contact'}
+                </button>
+              </div>
             </div>
+            {enrichMsg && (
+              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>{enrichMsg}</div>
+            )}
 
             {showContactForm && (
               <div style={{
@@ -328,7 +401,9 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
               </div>
             )}
 
-            {contacts.length === 0 && !showContactForm && (
+            {contactsError ? (
+              <p className="muted" style={{ color: '#b45309' }}>Couldn't load contacts</p>
+            ) : contacts.length === 0 && !showContactForm && (
               <p className="muted">No contacts yet</p>
             )}
 

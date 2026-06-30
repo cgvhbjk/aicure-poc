@@ -6,10 +6,8 @@ from datetime import datetime
 import requests
 
 from grant_utils import (
-    is_medical, classify_area, upsert_grant,
-    extract_phase, extract_conditions, extract_interventions,
+    build_grant_record, is_medical, upsert_grant,
 )
-from registry_utils import extract_nct
 from db import get_connection
 
 SNAPSHOT_DIR = os.path.join(
@@ -21,9 +19,13 @@ SEARCH_BODY = {
         "advanced_text_search": {
             "operator": "OR",
             "search_field": "terms",
+            # Indication-driven, CNS/neuro-led (AiCure's real focus), then
+            # cardiometabolic. General indications, not brand drug names.
             "search_text": (
-                "obesity GLP-1 semaglutide tirzepatide diabetes "
-                "cardiac heart failure adherence clinical trial"
+                "schizophrenia depression bipolar PTSD ADHD addiction "
+                "Parkinson Alzheimer epilepsy "
+                "obesity diabetes heart failure "
+                "medication adherence clinical trial"
             ),
         },
         "activity_codes": ["R01", "R44", "R43", "U01", "P01", "R21", "U54"],
@@ -115,7 +117,6 @@ def pull_nih_reporter():
                     start = proj.get("project_start_date") or ""
                     fiscal_year = int(start[:4]) if start and start[:4].isdigit() else None
 
-                nct = extract_nct(combined)
                 record = {
                     "id": f"NIH-{proj['project_num']}",
                     "source": "NIH_REPORTER",
@@ -137,19 +138,13 @@ def pull_nih_reporter():
                     "end_date": proj.get("project_end_date"),
                     "award_date": proj.get("award_notice_date"),
                     "status": "ACTIVE" if proj.get("is_active") else "COMPLETED",
-                    "therapeutic_area": classify_area(combined),
                     "country": proj.get("org_country", "US"),
                     "source_url": proj.get("project_detail_url"),
-                    "conditions": extract_conditions(combined),
-                    "interventions": extract_interventions(combined),
-                    "phase_mentioned": extract_phase(combined),
-                    "linked_trial_id": nct,
-                    "has_trial_link": 1 if nct else 0,
                 }
-                upsert_grant(record, conn)
+                upsert_grant(build_grant_record(combined, **record), conn)
                 total_inserted += 1
             except Exception as e:
-                print(f"  [WARN] NIH record error: {e}")
+                print(f"  [WARN] NIH record error ({proj.get('project_num')}): {e}")
 
         conn.commit()
         offset += len(results)

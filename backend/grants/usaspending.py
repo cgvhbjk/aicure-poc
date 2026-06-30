@@ -6,10 +6,8 @@ from datetime import datetime
 import requests
 
 from grant_utils import (
-    is_medical, classify_area, upsert_grant,
-    extract_phase, extract_conditions, extract_interventions,
+    build_grant_record, is_medical, upsert_grant,
 )
-from registry_utils import extract_nct
 from db import get_connection
 
 SEARCH_BODY = {
@@ -89,7 +87,6 @@ def pull_usaspending():
                 fiscal_year = int(start_date[:4]) if start_date and start_date[:4].isdigit() else None
 
                 recipient_name = award.get("Recipient Name") or ""
-                nct = extract_nct(combined)
                 amount = int(award.get("Award Amount") or 0) or None
 
                 record = {
@@ -111,17 +108,11 @@ def pull_usaspending():
                     "status": "ACTIVE",
                     "country": "US",
                     "source_url": f"https://www.usaspending.gov/award/{award_id}",
-                    "therapeutic_area": classify_area(combined),
-                    "conditions": extract_conditions(combined),
-                    "interventions": extract_interventions(combined),
-                    "phase_mentioned": extract_phase(combined),
-                    "linked_trial_id": nct,
-                    "has_trial_link": 1 if nct else 0,
                 }
-                upsert_grant(record, conn)
+                upsert_grant(build_grant_record(combined, **record), conn)
                 total_inserted += 1
             except Exception as e:
-                print(f"  [WARN] USASpending record error: {e}")
+                print(f"  [WARN] USASpending record error ({award.get('Award ID')}): {e}")
 
         conn.commit()
         has_next = data.get("page_metadata", {}).get("hasNext", False)

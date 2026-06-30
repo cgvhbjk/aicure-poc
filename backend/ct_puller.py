@@ -6,25 +6,19 @@ from datetime import datetime
 from db import get_connection
 from registry_utils import upsert_trial
 # Shared classifier / keyword-flag helper (was a divergent local copy here).
-from text_match import flag, classify_area
+from text_match import flag, classify_area, TARGET_CONDITIONS
 
 SNAPSHOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "snapshots")
 os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
 BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 
-CONDITIONS = [
-    "GLP-1",
-    "obesity",
-    "semaglutide",
-    "tirzepatide",
-    "liraglutide",
-    "Type 2 Diabetes",
-    "weight loss",
-    "cardiac care",
-    "heart failure",
-    "atrial fibrillation",
-]
+# Indication-driven CT.gov search terms (general indications / drug *classes*, not
+# brand names). Derived from the canonical target-condition taxonomy in text_match
+# (TARGET_CONDITIONS) so the search net and the scorer/classifier share one source
+# and a re-target edits one place; a drift test asserts every term classifies
+# in-focus. Brand-name detection still happens downstream via DRUG_KEYWORDS.
+CONDITIONS = [term for _area, term in TARGET_CONDITIONS]
 
 _EPRO_KEYWORDS = [
     "epro", "ecoa", "patient-reported outcome", "patient reported outcome",

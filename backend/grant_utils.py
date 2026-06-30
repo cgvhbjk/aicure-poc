@@ -11,24 +11,89 @@ GBP_TO_USD = 1.27
 EUR_TO_USD = 1.08
 
 MEDICAL_KEYWORDS = [
-    "obesity", "GLP-1", "semaglutide", "tirzepatide", "liraglutide",
-    "diabetes", "type 2 diabetes", "weight loss", "cardiac", "heart failure",
-    "atrial fibrillation", "dulaglutide", "metabolic", "bariatric",
-    "cardiometabolic", "endocrinology", "adherence", "clinical trial",
-    "randomized", "placebo", "phase 1", "phase 2", "phase 3",
-    "cardiovascular", "hypertension", "insulin", "glucose", "NASH",
-    "blood pressure", "coronary", "stroke", "kidney", "renal",
+    # CNS / psychiatry & neurology (AiCure's primary focus — must be present here or
+    # is_medical() would filter these grants out before they reach the pipeline)
+    "schizophrenia", "psychosis", "depression", "major depressive", "ptsd",
+    "post-traumatic", "bipolar", "adhd", "attention deficit", "anxiety",
+    "addiction", "substance use", "alcohol", "opioid", "smoking cessation",
+    "borderline personality", "tardive dyskinesia", "parkinson", "alzheimer",
+    "dementia", "huntington", "amyotrophic", "multiple sclerosis", "epilepsy",
+    "seizure", "essential tremor", "neurology", "psychiatric", "cns",
+    # cardiometabolic (secondary)
+    "obesity", "GLP-1", "diabetes", "type 2 diabetes", "weight loss", "cardiac",
+    "heart failure", "atrial fibrillation", "metabolic", "bariatric",
+    "cardiometabolic", "endocrinology", "cardiovascular", "hypertension",
+    "insulin", "glucose", "NASH", "blood pressure", "coronary", "stroke",
+    "kidney", "renal",
+    # cross-cutting
+    "adherence", "clinical trial", "randomized", "placebo",
+    "phase 1", "phase 2", "phase 3",
 ]
 
 PHASE_PATTERN = re.compile(r'\bphase\s*(1|2|3|4|I{1,3}V?)\b', re.IGNORECASE)
 
+# Condition names to EXTRACT from grant text (substring match in extract_conditions).
+# Intentionally broader than the CT.gov search net (text_match.TARGET_CONDITIONS) —
+# extraction tags any mentioned condition, even off-core ones — and uses extraction
+# spelling (e.g. "Parkinson's disease" with the apostrophe). The shared classifier
+# (text_match.classify_area) is what decides in/off-focus scoring, so this list and
+# the search net can differ without harm.
 CONDITION_KEYWORDS = [
+    # CNS / psychiatry & neurology (primary)
+    "schizophrenia", "major depressive disorder", "depression", "PTSD",
+    "bipolar disorder", "ADHD", "anxiety", "substance use disorder",
+    "alcohol use disorder", "opioid use disorder", "smoking cessation",
+    "tardive dyskinesia", "Parkinson's disease", "Alzheimer's disease", "dementia",
+    "Huntington's disease", "amyotrophic lateral sclerosis", "multiple sclerosis",
+    "epilepsy", "essential tremor",
+    # cardiometabolic (secondary)
     "obesity", "overweight", "type 2 diabetes", "T2D", "heart failure",
     "atrial fibrillation", "cardiovascular", "hypertension", "dyslipidemia",
     "metabolic syndrome", "bariatric", "weight loss", "cardiometabolic",
     "non-alcoholic fatty liver", "NAFLD", "NASH", "chronic kidney disease",
     "medication adherence", "treatment adherence",
 ]
+
+
+# ── Human-subjects gate (§3a) ─────────────────────────────────────────────────
+# Many research grants (esp. NIH RePORTER R01s) fund preclinical / animal /
+# in-vitro work that AiCure's adherence platform can never serve. Exclude grants
+# whose abstract is dominated by animal/basic-science cues with no human-subjects
+# signal. Conservative: a grant with ANY explicit human cue is kept.
+_ANIMAL_CUES = [
+    "mouse", "mice", "murine", "rodent", "zebrafish",
+    "drosophila", "in vitro", "in-vitro", "preclinical", "pre-clinical",
+    "animal model", "cell line", "xenograft",
+    "knockout", "transgenic", "c. elegans", "non-human primate",
+]
+# Short ambiguous tokens matched on WORD BOUNDARIES so "rat"/"rats" catch
+# "rat." / "rats," / "rat-derived" (which the old space-padded " rat " missed)
+# without hiding inside "strategy" / "operate".
+_ANIMAL_WORD_CUES = [re.compile(r"\brats?\b")]
+_HUMAN_CUES = [
+    "patient", "participant", "human subject", "clinical trial", "adults",
+    "volunteers", "in humans", "human participants", "enrolled", "randomized",
+    "phase 1", "phase 2", "phase 3", "phase i", "phase ii", "phase iii",
+]
+
+
+def is_human_subjects(text: str) -> bool:
+    """True unless the text is clearly preclinical/animal with no human cue.
+
+    Returns True for empty/unknown text (don't drop on missing data) and for any
+    text carrying an explicit human-subjects cue. Returns False only when animal /
+    basic-science cues are present AND no human cue is — i.e. a confidently
+    non-human grant.
+    """
+    if not text:
+        return True
+    t = text.lower()
+    has_human = any(c in t for c in _HUMAN_CUES)
+    if has_human:
+        return True
+    has_animal = (any(c in t for c in _ANIMAL_CUES)
+                  or any(p.search(t) for p in _ANIMAL_WORD_CUES))
+    return not has_animal
 
 
 def is_medical(text: str) -> bool:
@@ -70,11 +135,12 @@ def extract_interventions(text: str) -> str:
     return json.dumps(list(dict.fromkeys(found)))
 
 
-# Columns upsert_grant is allowed to write. Guards the dynamic column-name
-# interpolation below: column names come from record.keys() (ultimately derived
-# from external grant-API field maps), so an unexpected key must be rejected
-# rather than spliced into the SQL. Keep in sync with the grants schema in db.py.
-_GRANT_COLUMNS = frozenset({
+# Canonical grant column set — ONE source of truth. _GRANT_COLUMNS (the upsert
+# allowlist that guards the dynamic column-name interpolation below — column names
+# come from record.keys(), ultimately from external grant-API field maps, so an
+# unexpected key must be rejected rather than spliced into SQL) is derived from it.
+# Keep aligned with the grants schema in db.py.
+GRANT_RECORD_FIELDS = (
     "id", "source", "award_id", "title", "abstract", "pi_name", "pi_email",
     "organization", "org_type", "sponsor_funder", "amount_usd", "currency",
     "amount_original", "start_date", "end_date", "award_date", "status",
@@ -82,8 +148,40 @@ _GRANT_COLUMNS = frozenset({
     "linked_trial_id", "country", "source_url", "raw_snapshot_path",
     "ingested_at", "has_trial_link", "aicure_fit", "activity_code",
     "agency_division", "fiscal_year", "project_acronym", "research_type",
-    "first_seen",
-})
+    "first_seen", "human_subjects",
+)
+_GRANT_COLUMNS = frozenset(GRANT_RECORD_FIELDS)
+
+# Columns build_grant_record DERIVES from the title+abstract text blob — adding a
+# new derived column means editing here once, not in all 7 per-source pullers.
+_DERIVED_GRANT_FIELDS = (
+    "therapeutic_area", "conditions", "interventions", "phase_mentioned",
+    "linked_trial_id", "has_trial_link", "human_subjects",
+)
+
+
+def build_grant_record(text: str, **fields) -> dict:
+    """Assemble a grant record from a puller's explicit `**fields`, deriving the
+    computed columns (see _DERIVED_GRANT_FIELDS) from `text` — the title+abstract
+    blob. Collapses the identical derivation block the 7 grant pullers each used to
+    repeat, so a future derived column lands here only. Explicit values in `fields`
+    win (a puller that already resolved e.g. a linked trial id can pass it)."""
+    t = text or ""
+    nct = extract_nct(t)
+    record = {
+        "therapeutic_area": classify_area(t),
+        "conditions": extract_conditions(t),
+        "interventions": extract_interventions(t),
+        "phase_mentioned": extract_phase(t),
+        "linked_trial_id": nct,
+        "has_trial_link": 1 if nct else 0,
+        "human_subjects": int(is_human_subjects(t)),
+    }
+    record.update(fields)
+    # Keep has_trial_link consistent if a puller supplied its own linked_trial_id.
+    if "linked_trial_id" in fields:
+        record["has_trial_link"] = 1 if fields["linked_trial_id"] else 0
+    return record
 
 
 def upsert_grant(record: dict, conn=None):

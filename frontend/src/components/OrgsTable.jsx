@@ -5,7 +5,7 @@ import OrgDetailPanel from './OrgDetailPanel'
 import { GRID_LOADING_TEMPLATE, GRID_EMPTY_TEMPLATE, gridErrorMessage } from '../utils/gridUi'
 import { safeHref } from '../utils/url'
 
-// Columns the backend can ORDER BY (mirrors ORG_SORTABLE_COLUMNS in api.py).
+// Columns the backend can ORDER BY (mirrors ORG_SORTABLE_COLUMNS in routes/_shared.py).
 const SORTABLE_FIELDS = new Set(['canonical_name', 'org_type', 'trial_count'])
 
 const ORG_TYPE_STYLES = {
@@ -21,10 +21,12 @@ const ORG_TYPE_STYLES = {
   OTHER:          { background: '#f1f5f9', color: '#475569' },
 }
 
+const ORG_TYPE_LABELS = { ACADEMIC: 'University / Academic' }
+
 function OrgTypeBadge({ value }) {
   if (!value) return null
   const style = ORG_TYPE_STYLES[value] || ORG_TYPE_STYLES.OTHER
-  return <span className="badge" style={style}>{value.replace(/_/g, ' ')}</span>
+  return <span className="badge" style={style}>{ORG_TYPE_LABELS[value] || value.replace(/_/g, ' ')}</span>
 }
 
 function LinkCell({ value }) {
@@ -152,6 +154,7 @@ export default function OrgsTable({ filters, filterOpen, onToggleFilter, onSelec
 
       {selectedOrg && (
         <OrgDetailPanel
+          key={selectedOrg.id}
           org={selectedOrg}
           onClose={() => setSelectedOrg(null)}
           onSelectTrial={onSelectTrial}

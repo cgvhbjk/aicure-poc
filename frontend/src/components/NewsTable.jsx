@@ -12,7 +12,7 @@ import { safeHref } from '../utils/url'
 // it includes the /pipeline subpath in the proxied prod deploy).
 const _API_BASE = apiBase
 
-// Columns the backend can ORDER BY (mirrors NEWS_SORTABLE_COLUMNS in api.py);
+// Columns the backend can ORDER BY (mirrors NEWS_SORTABLE_COLUMNS in routes/_shared.py);
 // joined trial_* columns and the match_method subquery alias are display-only.
 const SORTABLE_FIELDS = new Set([
   'published_at', 'source', 'title', 'drug_mentioned', 'phase_mentioned',

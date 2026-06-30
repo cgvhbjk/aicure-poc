@@ -26,6 +26,7 @@ from ictrp_puller import pull_all_ictrp
 from isrctn_puller import pull_all_isrctn
 from cris_puller import pull_all_cris
 from rss_parser import parse_all_feeds
+from sec_puller import pull_sec
 from linker import run_linker
 from org_extractor import extract_all_orgs
 from merge_detector import run_merge_detection
@@ -45,6 +46,7 @@ STEPS = [
     ("ISRCTN", pull_all_isrctn),
     ("CRIS", pull_all_cris),
     ("RSS feeds", parse_all_feeds),
+    ("SEC EDGAR", pull_sec),
     ("Linker", run_linker),
     ("Organizations", extract_all_orgs),
     ("Merge detection", run_merge_detection),

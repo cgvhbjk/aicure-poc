@@ -6,10 +6,8 @@ from datetime import datetime
 import requests
 
 from grant_utils import (
-    is_medical, classify_area, upsert_grant, GBP_TO_USD,
-    extract_phase, extract_conditions, extract_interventions,
+    build_grant_record, is_medical, upsert_grant, GBP_TO_USD,
 )
-from registry_utils import extract_nct
 from db import get_connection
 
 SEARCH_TERMS = [
@@ -94,7 +92,6 @@ def pull_ukri():
                     research_subjects = proj.get("researchSubject") or []
                     research_type = research_subjects[0].get("text") if research_subjects else None
 
-                    nct = extract_nct(combined)
                     record = {
                         "id": f"UKRI-{proj_id}",
                         "source": "UKRI",
@@ -115,18 +112,12 @@ def pull_ukri():
                         "activity_code": proj.get("grantCategory"),
                         "research_type": research_type,
                         "country": "UK",
-                        "therapeutic_area": classify_area(combined),
                         "source_url": f"https://gtr.ukri.org/projects?ref={proj_id}",
-                        "conditions": extract_conditions(combined),
-                        "interventions": extract_interventions(combined),
-                        "phase_mentioned": extract_phase(combined),
-                        "linked_trial_id": nct,
-                        "has_trial_link": 1 if nct else 0,
                     }
-                    upsert_grant(record, conn)
+                    upsert_grant(build_grant_record(combined, **record), conn)
                     total_inserted += 1
                 except Exception as e:
-                    print(f"  [WARN] UKRI record error: {e}")
+                    print(f"  [WARN] UKRI record error ({proj.get('id')}): {e}")
 
             conn.commit()
             if page >= total_pages or not projects:
