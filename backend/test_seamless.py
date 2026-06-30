@@ -83,5 +83,52 @@ def test_failed_lookup_cached_not_rebilled(monkeypatch):
     assert r1["ok"] is False and r1["api_calls"] == 1 and calls["n"] == 1
 
     r2 = seamless.enrich_org_contacts("org-err")     # immediate retry → error marker
-    assert r2["source"] == "cache" and r2["api_calls"] == 0
-    assert calls["n"] == 1                            # NOT re-billed
+    # Served from the error marker: NOT re-billed, and reported honestly as a
+    # failure (not "ok with 0 contacts") so an outage isn't mistaken for an org
+    # genuinely having no clinical decision-makers.
+    assert r2["ok"] is False and r2["source"] == "cache-error"
+    assert r2["api_calls"] == 0 and calls["n"] == 1   # NOT re-billed
+
+
+def test_unparseable_response_raises_and_is_cached_as_error(monkeypatch):
+    """A 200 whose body has no known contacts key is a billed-but-unusable result:
+    _call_seamless raises SeamlessError, and enrich turns it into a short-TTL error
+    marker + honest ok:False — NOT a bogus 90-day empty result."""
+    _make_org("org-shape", "Shape Bio")
+    monkeypatch.setenv("SEAMLESS_API_KEY", "test-key")
+
+    def fake(org_name):
+        raise seamless.SeamlessError("unparseable 200 response; keys=['results']")
+    monkeypatch.setattr(seamless, "_call_seamless", fake)
+
+    r1 = seamless.enrich_org_contacts("org-shape", force_refresh=True)
+    assert r1["ok"] is False and r1["api_calls"] == 1
+    r2 = seamless.enrich_org_contacts("org-shape")            # within error-TTL
+    assert r2["ok"] is False and r2["source"] == "cache-error" and r2["api_calls"] == 0
+
+
+def test_real_call_raises_on_unknown_shape(monkeypatch):
+    """_call_seamless itself raises SeamlessError when the 200 has no contacts/data
+    key, but treats {"contacts": []} as a legitimate empty result (no raise)."""
+    monkeypatch.setenv("SEAMLESS_API_KEY", "test-key")
+
+    class _Resp:
+        def __init__(self, payload): self._p = payload
+        def raise_for_status(self): pass
+        def json(self): return self._p
+
+    class _Stub:
+        def __init__(self, payload): self._p = payload
+        def post(self, *a, **k): return _Resp(self._p)
+
+    import sys
+    monkeypatch.setitem(sys.modules, "requests", _Stub({"results": [{"name": "X"}]}))
+    try:
+        seamless._call_seamless("Acme")
+        assert False, "expected SeamlessError on unknown shape"
+    except seamless.SeamlessError:
+        pass
+
+    monkeypatch.setitem(sys.modules, "requests", _Stub({"contacts": []}))
+    contacts, _credits = seamless._call_seamless("Acme")     # legit empty, no raise
+    assert contacts == []

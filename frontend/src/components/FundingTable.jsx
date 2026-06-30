@@ -256,13 +256,19 @@ export default function FundingTable({
   const [filterOptionsError, setFilterOptionsError] = useState(false)
 
   useEffect(() => {
+    const asArray = (v) => (Array.isArray(v) ? v : [])
     fetch(`${_API_BASE}/grants/filter-options`)
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
-      // Normalize on write so every key is ALWAYS an array regardless of the
-      // response shape — a partial/error body must not make `.length` throw on
-      // render (this is now the only path to these dropdowns since the sidebar
-      // was removed).
-      .then((d) => setFilterOptions({ ...EMPTY_FILTER_OPTIONS, ...(d && typeof d === 'object' ? d : {}) }))
+      // Coerce EACH key to an array on write, so every value is genuinely an array
+      // regardless of the response shape — a partial/wrong-typed body can't make a
+      // downstream `.length`/`.map` throw (this is now the only path to these
+      // dropdowns since the sidebar was removed).
+      .then((d) => setFilterOptions({
+        activity_codes: asArray(d?.activity_codes),
+        org_types: asArray(d?.org_types),
+        research_types: asArray(d?.research_types),
+        agency_divisions: asArray(d?.agency_divisions),
+      }))
       .catch((e) => { console.error('Failed to load grant filter options', e); setFilterOptionsError(true) })
   }, [])
 

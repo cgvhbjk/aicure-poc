@@ -44,6 +44,18 @@ _ERROR_TTL_DAYS = int(os.environ.get("AICURE_SEAMLESS_ERROR_TTL_DAYS", "1"))
 _API_URL = os.environ.get("SEAMLESS_API_URL",
                           "https://api.seamless.ai/v1/search/contacts")
 
+
+class SeamlessError(Exception):
+    """A billed lookup we couldn't use — e.g. a 200 whose shape we can't parse
+    (likely a Seamless response-schema change). Cached short-TTL + surfaced, not
+    persisted as a bogus 90-day "empty"."""
+
+
+# Sentinel returned by _cached_contacts for a FRESH error marker (a prior failed
+# lookup) — distinct from None (cache miss) and [] (a legitimately-empty result),
+# so the caller can report the failure honestly instead of as "0 contacts".
+_CACHE_ERROR = object()
+
 # Per-org locks: serialize the read→API→write critical section so two concurrent
 # enrichments of the same org (or a force_refresh racing a normal call) can't
 # both miss the cache and both spend a credit.
@@ -96,11 +108,13 @@ def _call_seamless(org_name: str):
     resp.raise_for_status()
     data = resp.json() or {}
     raw = data.get("contacts") or data.get("data") or []
-    # A 200 with a non-empty body but no parseable contacts means Seamless changed
-    # its response shape (e.g. nested the list under a new key). We still got
-    # billed, so surface it rather than silently caching an empty result.
-    if not raw and data:
-        print(f"[seamless] 200 response with no parseable contacts; keys={list(data)[:10]}")
+    # A 200 whose body has NEITHER known contacts key means Seamless changed its
+    # response shape (e.g. nested the list under a new key). We were billed, so
+    # raise — enrich caches a short-TTL error marker and surfaces it — rather than
+    # persisting a bogus 90-day "empty". ({"contacts": []} IS a legit empty result
+    # and is NOT treated as an error.)
+    if not raw and data and "contacts" not in data and "data" not in data:
+        raise SeamlessError(f"unparseable 200 response; keys={list(data)[:10]}")
     credits = data.get("creditsUsed")
     if credits is None:
         credits = len(raw)
@@ -144,9 +158,10 @@ def _cached_contacts(conn, cache_key):
         print(f"[seamless] corrupt response_json for {cache_key} ({e}); treating as miss")
         return None
     if isinstance(data, dict) and "error" in data:
-        # A cached failed lookup: serve as empty within the short error-TTL (no
-        # re-bill), then expire so a later retry can try the API again.
-        return [] if age <= timedelta(days=_ERROR_TTL_DAYS) else None
+        # A cached FAILED lookup: within the short error-TTL, report it as an error
+        # (no re-bill, but honestly distinguishable from "0 contacts"); after the
+        # error-TTL, treat as a miss so a later retry can hit the API again.
+        return _CACHE_ERROR if age <= timedelta(days=_ERROR_TTL_DAYS) else None
     if not isinstance(data, list):
         print(f"[seamless] unexpected cache shape for {cache_key} "
               f"({type(data).__name__}); treating as miss")
@@ -215,6 +230,12 @@ def enrich_org_contacts(org_id, force_refresh: bool = False) -> dict:
         with _org_lock(ck):
             if not force_refresh:
                 cached = _cached_contacts(conn, ck)
+                if cached is _CACHE_ERROR:
+                    # A recent lookup failed; we're suppressing re-bills within the
+                    # error-TTL but must not pretend it succeeded with 0 contacts.
+                    return {"ok": False, "source": "cache-error", "api_calls": 0,
+                            "error": "previous Seamless lookup failed; cached, "
+                                     "will retry after the error window"}
                 if cached is not None:
                     inserted = _upsert_contacts(conn, org_id, cached)
                     conn.commit()

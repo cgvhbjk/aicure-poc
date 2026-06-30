@@ -7,11 +7,8 @@ from urllib.parse import urljoin
 import requests
 
 from grant_utils import (
-    build_grant_record,
-    is_medical, is_human_subjects, classify_area, upsert_grant,
-    extract_phase, extract_conditions, extract_interventions,
+    build_grant_record, is_medical, upsert_grant,
 )
-from registry_utils import extract_nct
 from db import get_connection
 
 # AHA Crossref funder DOI — free, no registration needed

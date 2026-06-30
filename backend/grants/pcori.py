@@ -10,11 +10,8 @@ except ImportError:
     _HAS_PLAYWRIGHT = False
 
 from grant_utils import (
-    build_grant_record,
-    classify_area, upsert_grant, is_human_subjects,
-    extract_phase, extract_conditions, extract_interventions,
+    build_grant_record, upsert_grant,
 )
-from registry_utils import extract_nct
 from db import get_connection
 
 BASE_URL = "https://www.pcori.org"

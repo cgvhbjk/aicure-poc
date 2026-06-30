@@ -8,11 +8,8 @@ from urllib.parse import quote
 import requests
 
 from grant_utils import (
-    build_grant_record,
-    classify_area, upsert_grant, is_human_subjects, EUR_TO_USD,
-    extract_phase, extract_conditions, extract_interventions,
+    build_grant_record, upsert_grant, EUR_TO_USD,
 )
-from registry_utils import extract_nct
 from db import get_connection
 
 SEARCH_TERMS = [

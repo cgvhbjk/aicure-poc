@@ -25,7 +25,7 @@ def test_acquisition_applies_without_trial_touchpoint():
     }
     a = news_nlp.analyze(item, use_llm=False)   # force rules path
     assert a["applies_to_aicure"] is True
-    assert a["aicure_category"] == "Acquisition / M&A"
+    assert a["aicure_category"] == news_nlp.ACQUISITION_CATEGORY
     assert a["not_yet_started"] is True
     assert a.get("acquirer") and a.get("target")
     assert "NovaBio" in (a.get("target") or "")
@@ -53,5 +53,5 @@ def test_acquisition_skips_llm_backend(monkeypatch):
     }
     a = news_nlp.analyze(item)                 # no use_llm → would hit the LLM without the hoist
     assert called["llm"] is False              # acquisition never reaches the LLM
-    assert a["aicure_category"] == "Acquisition / M&A"
+    assert a["aicure_category"] == news_nlp.ACQUISITION_CATEGORY
     assert a.get("acquirer") and a.get("target")
