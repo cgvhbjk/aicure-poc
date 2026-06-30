@@ -129,6 +129,8 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
   const [savingContact, setSavingContact] = useState(false)
   const [enriching, setEnriching] = useState(false)
   const [enrichMsg, setEnrichMsg] = useState(null)
+  const [trialsError, setTrialsError] = useState(false)
+  const [contactsError, setContactsError] = useState(false)
 
   // Track mount so a slow enrichment that resolves after the panel closes
   // doesn't setState on an unmounted component.
@@ -144,9 +146,18 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
     // panel's state is keyed off org?.id; keep this consistent).
     setEnrichMsg(null)
     setEnriching(false)
+    setTrialsError(false)
+    setContactsError(false)
     setLoadingTrials(true)
-    getOrgTrials(org.id).then((r) => setTrials(r.data)).catch(console.error).finally(() => setLoadingTrials(false))
-    getOrgContacts(org.id).then((r) => setContacts(r.data)).catch(console.error)
+    // On failure surface an error state, not just console — otherwise a failed
+    // load is indistinguishable from a genuinely empty org ("No contacts yet").
+    getOrgTrials(org.id)
+      .then((r) => setTrials(r.data))
+      .catch((e) => { console.error('Failed to load org trials', e); setTrialsError(true) })
+      .finally(() => setLoadingTrials(false))
+    getOrgContacts(org.id)
+      .then((r) => setContacts(r.data))
+      .catch((e) => { console.error('Failed to load org contacts', e); setContactsError(true) })
   }, [org?.id])
 
   const patch = useCallback(async (field, value) => {
@@ -291,6 +302,8 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
             <div className="detail-section-title">Linked Trials</div>
             {loadingTrials ? (
               <p className="muted">Loading…</p>
+            ) : trialsError ? (
+              <p className="muted" style={{ color: '#b45309' }}>Couldn't load linked trials</p>
             ) : trials.length === 0 ? (
               <p className="muted">No linked trials</p>
             ) : (
@@ -388,7 +401,9 @@ export default function OrgDetailPanel({ org, onClose, onSelectTrial, onOrgUpdat
               </div>
             )}
 
-            {contacts.length === 0 && !showContactForm && (
+            {contactsError ? (
+              <p className="muted" style={{ color: '#b45309' }}>Couldn't load contacts</p>
+            ) : contacts.length === 0 && !showContactForm && (
               <p className="muted">No contacts yet</p>
             )}
 

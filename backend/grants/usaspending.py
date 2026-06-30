@@ -112,7 +112,7 @@ def pull_usaspending():
                 upsert_grant(build_grant_record(combined, **record), conn)
                 total_inserted += 1
             except Exception as e:
-                print(f"  [WARN] USASpending record error: {e}")
+                print(f"  [WARN] USASpending record error ({award.get('Award ID')}): {e}")
 
         conn.commit()
         has_next = data.get("page_metadata", {}).get("hasNext", False)

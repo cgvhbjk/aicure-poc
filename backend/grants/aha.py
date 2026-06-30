@@ -117,7 +117,7 @@ def pull_aha():
                     upsert_grant(build_grant_record(combined, **record), conn)
                     total_inserted += 1
             except Exception as e:
-                print(f"  [WARN] AHA record error: {e}")
+                print(f"  [WARN] AHA record error ({award_id}): {e}")
 
         conn.commit()
         next_cursor = data.get("next-cursor")

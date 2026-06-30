@@ -59,6 +59,13 @@ _CACHE_ERROR = object()
 # Per-org locks: serialize the read→API→write critical section so two concurrent
 # enrichments of the same org (or a force_refresh racing a normal call) can't
 # both miss the cache and both spend a credit.
+# CAVEAT: this is PROCESS-LOCAL. Under a multi-worker deploy (uvicorn/gunicorn
+# --workers N, the ECS/Fargate target) two workers can still each miss the cache
+# and each bill one credit; the DB cache caps the steady-state cost but the lock
+# does not make double-spend impossible across processes. A DB-level claim (e.g.
+# an INSERT OR IGNORE in-flight sentinel row) would be needed for cross-process
+# safety. The dict also grows one Lock per distinct org for the process lifetime
+# (a bounded, minor leak for a per-org admin action).
 _locks_guard = threading.Lock()
 _org_locks: dict = {}
 

@@ -117,7 +117,7 @@ def pull_ukri():
                     upsert_grant(build_grant_record(combined, **record), conn)
                     total_inserted += 1
                 except Exception as e:
-                    print(f"  [WARN] UKRI record error: {e}")
+                    print(f"  [WARN] UKRI record error ({proj.get('id')}): {e}")
 
             conn.commit()
             if page >= total_pages or not projects:

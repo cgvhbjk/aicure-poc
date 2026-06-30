@@ -144,7 +144,7 @@ def pull_nih_reporter():
                 upsert_grant(build_grant_record(combined, **record), conn)
                 total_inserted += 1
             except Exception as e:
-                print(f"  [WARN] NIH record error: {e}")
+                print(f"  [WARN] NIH record error ({proj.get('project_num')}): {e}")
 
         conn.commit()
         offset += len(results)
